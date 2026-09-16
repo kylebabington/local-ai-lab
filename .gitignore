@@ -1,0 +1,9 @@
+.local-ai-index.json
+chat-history.json
+chat_history.json
+data/tool-activity.jsonl
+.tool-test-sandbox/
+
+# Frontend (Vite)
+ui/node_modules/
+ui/dist/

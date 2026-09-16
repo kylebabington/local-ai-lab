@@ -1,0 +1,16 @@
+{
+  "name": "local-ai-lab",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "chat": "node app.js",
+    "server": "node server.js",
+    "rag:index": "node project-rag.js index",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC"
+}
