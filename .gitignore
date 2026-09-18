@@ -2,7 +2,10 @@
 chat-history.json
 chat_history.json
 data/tool-activity.jsonl
+data/file-roots.json
+data/file-inventory.json
 .tool-test-sandbox/
+.file-test-sandbox/
 
 # Frontend (Vite)
 ui/node_modules/

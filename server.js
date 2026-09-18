@@ -11,6 +11,7 @@
 //   lib/rag.js
 //   lib/ollama.js
 //   lib/agent.js
+//   lib/file-inventory.js
 //   lib/tools/*
 // =========================================================
 
@@ -40,6 +41,14 @@ import {
 } from "./lib/agent.js";
 
 import { readActivity } from "./lib/activity.js";
+import {
+    addRoot,
+    getStatus,
+    listRoots,
+    removeRoot,
+    scanInventory,
+    searchInventory,
+} from "./lib/file-inventory.js";
 import {
     describeAllowedRoots,
     listTools,
@@ -82,6 +91,10 @@ function isOllamaUnavailable(error) {
 
 
 function errorStatus(error) {
+    if (typeof error?.status === "number") {
+        return error.status;
+    }
+
     if (isOllamaUnavailable(error)) {
         return 503;
     }
@@ -94,6 +107,31 @@ function errorStatus(error) {
     }
 
     return 500;
+}
+
+
+function clientErrorStatus(error, fallback = 400) {
+    if (typeof error?.status === "number") {
+        return error.status;
+    }
+
+    const message = error?.message ?? "";
+
+    if (
+        message.includes("required") ||
+        message.includes("must be") ||
+        message.includes("does not exist") ||
+        message.includes("cannot be") ||
+        message.includes("already") ||
+        message.includes("inside") ||
+        message.includes("Unknown") ||
+        message.includes("Malformed") ||
+        message.includes("Add at least one")
+    ) {
+        return fallback;
+    }
+
+    return errorStatus(error);
 }
 
 
@@ -375,6 +413,126 @@ async function handleActivityGet(url, response) {
 }
 
 
+async function handleFilesStatusGet(response) {
+    try {
+        const status = await getStatus();
+        sendJson(response, 200, status);
+    } catch (error) {
+        console.error("GET /api/files/status failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, 500),
+            userSafeMessage(error, "Could not read file inventory status."),
+        );
+    }
+}
+
+
+async function handleFilesRootsGet(response) {
+    try {
+        const roots = await listRoots();
+        sendJson(response, 200, { roots });
+    } catch (error) {
+        console.error("GET /api/files/roots failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, 500),
+            userSafeMessage(error, "Could not list file roots."),
+        );
+    }
+}
+
+
+async function handleFilesRootsPost(request, response) {
+    let body;
+
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    const folderPath = typeof body.path === "string" ? body.path : "";
+
+    try {
+        const root = await addRoot(folderPath);
+        sendJson(response, 200, { root });
+    } catch (error) {
+        console.error("POST /api/files/roots failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error),
+            userSafeMessage(error, "Could not add file root."),
+        );
+    }
+}
+
+
+async function handleFilesRootsRemovePost(request, response) {
+    let body;
+
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    const id = typeof body.id === "string" ? body.id : "";
+
+    try {
+        const root = await removeRoot(id);
+        sendJson(response, 200, { root });
+    } catch (error) {
+        console.error("POST /api/files/roots/remove failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error),
+            userSafeMessage(error, "Could not remove file root."),
+        );
+    }
+}
+
+
+async function handleFilesScanPost(response) {
+    try {
+        const summary = await scanInventory();
+        sendJson(response, 200, { summary });
+    } catch (error) {
+        console.error("POST /api/files/scan failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error),
+            userSafeMessage(error, "File inventory scan failed."),
+        );
+    }
+}
+
+
+async function handleFilesSearchGet(url, response) {
+    try {
+        const result = await searchInventory({
+            query: url.searchParams.get("query") ?? "",
+            rootId: url.searchParams.get("rootId") ?? "",
+            extension: url.searchParams.get("extension") ?? "",
+            limit: Number(url.searchParams.get("limit")),
+            offset: Number(url.searchParams.get("offset")),
+            sort: url.searchParams.get("sort") ?? "name",
+            direction: url.searchParams.get("direction") ?? "asc",
+        });
+        sendJson(response, 200, result);
+    } catch (error) {
+        console.error("GET /api/files failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, 500),
+            userSafeMessage(error, "Could not search file inventory."),
+        );
+    }
+}
+
+
 async function handleRequest(request, response) {
     const url = new URL(request.url ?? "/", `http://${HOST}:${PORT}`);
     const pathname = url.pathname;
@@ -486,6 +644,61 @@ async function handleRequest(request, response) {
             }
 
             await handleActivityGet(url, response);
+            return;
+        }
+
+        if (pathname === "/api/files/status") {
+            if (!requireMethod(request, response, ["GET"])) {
+                return;
+            }
+
+            await handleFilesStatusGet(response);
+            return;
+        }
+
+        if (pathname === "/api/files/roots") {
+            if (request.method === "GET") {
+                await handleFilesRootsGet(response);
+                return;
+            }
+
+            if (request.method === "POST") {
+                await handleFilesRootsPost(request, response);
+                return;
+            }
+
+            sendError(
+                response,
+                405,
+                `Method ${request.method} is not allowed for this route.`,
+            );
+            return;
+        }
+
+        if (pathname === "/api/files/roots/remove") {
+            if (!requireMethod(request, response, ["POST"])) {
+                return;
+            }
+
+            await handleFilesRootsRemovePost(request, response);
+            return;
+        }
+
+        if (pathname === "/api/files/scan") {
+            if (!requireMethod(request, response, ["POST"])) {
+                return;
+            }
+
+            await handleFilesScanPost(response);
+            return;
+        }
+
+        if (pathname === "/api/files") {
+            if (!requireMethod(request, response, ["GET"])) {
+                return;
+            }
+
+            await handleFilesSearchGet(url, response);
             return;
         }
 

@@ -663,6 +663,153 @@ h3 {
     border-color: rgba(138, 160, 181, 0.28);
 }
 
+.files-section {
+    display: grid;
+    gap: var(--space-4);
+}
+
+.files-section h2 {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 1.15rem;
+    font-weight: 600;
+}
+
+.files-section-copy {
+    margin: 0;
+    color: var(--text-muted);
+    max-width: 40rem;
+}
+
+.files-root-form,
+.files-search-form {
+    display: grid;
+    gap: var(--space-3);
+    align-items: end;
+}
+
+.files-search-form {
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+}
+
+.files-root-form {
+    grid-template-columns: 1fr auto;
+}
+
+.files-field {
+    display: grid;
+    gap: var(--space-2);
+}
+
+.files-field span {
+    font-size: 0.78rem;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.files-field input,
+.files-field select {
+    width: 100%;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface-2);
+    color: var(--text);
+    padding: 0.55rem 0.75rem;
+    font: inherit;
+}
+
+.files-root-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-3);
+}
+
+.files-root-item {
+    display: flex;
+    gap: var(--space-3);
+    justify-content: space-between;
+    align-items: center;
+    padding: var(--space-3);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    background: var(--bg-surface-2);
+}
+
+.files-root-path {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.86rem;
+    word-break: break-all;
+}
+
+.files-summary {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr));
+    gap: var(--space-3);
+    margin: 0;
+}
+
+.files-summary dt {
+    font-size: 0.78rem;
+    color: var(--text-faint);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.files-summary dd {
+    margin: var(--space-1) 0 0;
+    font-variant-numeric: tabular-nums;
+}
+
+.files-table-wrap {
+    overflow-x: auto;
+}
+
+.files-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.9rem;
+}
+
+.files-table th,
+.files-table td {
+    text-align: left;
+    padding: 0.65rem 0.75rem;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+}
+
+.files-table th {
+    color: var(--text-faint);
+    font-size: 0.78rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+}
+
+.files-table code {
+    font-family: var(--font-mono);
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    word-break: break-all;
+}
+
+.files-pager {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-3);
+    justify-content: space-between;
+    align-items: center;
+}
+
+.files-pager-actions {
+    display: flex;
+    gap: var(--space-2);
+}
+
 .chat-composer {
     display: grid;
     gap: var(--space-2);
@@ -1051,8 +1198,44 @@ h3 {
     .chat-composer-main,
     .settings-row,
     .activity-item,
-    .tool-action-card-footer {
+    .tool-action-card-footer,
+    .files-root-form,
+    .files-root-item,
+    .files-pager {
         grid-template-columns: 1fr;
+    }
+
+    .files-root-form,
+    .files-root-item,
+    .files-pager {
+        display: grid;
+    }
+
+    .files-table thead {
+        display: none;
+    }
+
+    .files-table tr {
+        display: grid;
+        gap: var(--space-1);
+        padding: var(--space-3) 0;
+        border-bottom: 1px solid var(--border);
+    }
+
+    .files-table td {
+        display: grid;
+        grid-template-columns: 6.5rem 1fr;
+        gap: var(--space-2);
+        border: 0;
+        padding: 0.15rem 0;
+    }
+
+    .files-table td::before {
+        content: attr(data-label);
+        color: var(--text-faint);
+        font-size: 0.78rem;
+        text-transform: uppercase;
+        letter-spacing: 0.04em;
     }
 
     .tool-action-card-footer,

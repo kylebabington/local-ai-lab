@@ -152,6 +152,68 @@ export interface AppSettings {
     motion: MotionPreference;
 }
 
+export interface FileRoot {
+    id: string;
+    path: string;
+    realPath: string;
+}
+
+export interface FileInventoryEntry {
+    rootId: string;
+    absolutePath: string;
+    relativePath: string;
+    name: string;
+    extension: string;
+    size: number;
+    mtimeMs: number;
+    modifiedAt: string;
+    fingerprint: string;
+}
+
+export interface FileInventorySummary {
+    fileCount: number;
+    totalBytes: number;
+    skippedCount: number;
+    errorCount: number;
+    truncated: boolean;
+    truncationReason: string | null;
+}
+
+export interface FileInventoryStatus {
+    roots: FileRoot[];
+    rootCount: number;
+    inventoryExists: boolean;
+    scannedAt: string | null;
+    fileCount: number;
+    totalBytes: number;
+    skippedCount: number;
+    errorCount: number;
+    truncated: boolean;
+    truncationReason: string | null;
+    scanning: boolean;
+}
+
+export type FileSearchSort = "name" | "modified" | "size";
+
+export type FileSearchDirection = "asc" | "desc";
+
+export interface FileSearchParams {
+    query?: string;
+    rootId?: string;
+    extension?: string;
+    limit?: number;
+    offset?: number;
+    sort?: FileSearchSort;
+    direction?: FileSearchDirection;
+}
+
+export interface FileSearchResponse {
+    total: number;
+    offset: number;
+    limit: number;
+    files: FileInventoryEntry[];
+}
+
 export const DISPLAY_MODEL = "qwen3:4b-instruct";
 
 export const DEFAULT_SETTINGS: AppSettings = {
