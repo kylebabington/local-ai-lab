@@ -12,5 +12,9 @@
   },
   "keywords": [],
   "author": "",
-  "license": "ISC"
+  "license": "ISC",
+  "dependencies": {
+    "mammoth": "^1.12.3",
+    "pdf-parse": "^2.4.5"
+  }
 }

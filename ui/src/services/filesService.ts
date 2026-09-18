@@ -1,15 +1,17 @@
 /**
- * File Intelligence API — metadata inventory only.
+ * File Intelligence API — metadata inventory + content index.
  * Pages must not call fetch directly.
  */
 
 import { apiRequest } from "./http";
 import type {
+    FileContentIndexStatus,
     FileInventoryStatus,
     FileInventorySummary,
     FileRoot,
     FileSearchParams,
     FileSearchResponse,
+    FileSemanticMatch,
 } from "../types";
 
 export async function fetchFileStatus(): Promise<FileInventoryStatus> {
@@ -100,4 +102,47 @@ export async function searchFiles(
     const path = query ? `/api/files?${query}` : "/api/files";
 
     return apiRequest<FileSearchResponse>(path);
+}
+
+export async function fetchFileContentIndexStatus(): Promise<FileContentIndexStatus> {
+    return apiRequest<FileContentIndexStatus>("/api/files/index/status");
+}
+
+export async function indexFileContents(): Promise<{
+    summary: Record<string, number>;
+}> {
+    return apiRequest<{ summary: Record<string, number> }>("/api/files/index", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+    });
+}
+
+export async function semanticSearchFiles(params: {
+    query: string;
+    rootId?: string;
+    extension?: string;
+    limit?: number;
+}): Promise<FileSemanticMatch[]> {
+    const trimmed = params.query.trim();
+
+    if (!trimmed) {
+        throw new Error("Enter a semantic search query.");
+    }
+
+    const data = await apiRequest<{ matches?: FileSemanticMatch[] }>(
+        "/api/files/semantic-search",
+        {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                query: trimmed,
+                rootId: params.rootId,
+                extension: params.extension,
+                limit: params.limit,
+            }),
+        },
+    );
+
+    return data.matches ?? [];
 }

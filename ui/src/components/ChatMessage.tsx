@@ -1,5 +1,6 @@
 import { ToolActionCard } from "./ToolActionCard";
-import type { ChatMessage, PendingApproval, ToolAction } from "../types";
+import { isFileRagSource } from "../services/chatService";
+import type { ChatMessage, ChatSource, PendingApproval, ToolAction } from "../types";
 
 interface ChatMessageItemProps {
     message: ChatMessage;
@@ -51,6 +52,47 @@ function approvalToAction(
         permission: approval.permission,
         busy,
     };
+}
+
+function sourceMeta(source: ChatSource): string {
+    if (isFileRagSource(source)) {
+        const parts: string[] = [];
+
+        if (
+            typeof source.pageStart === "number" &&
+            typeof source.pageEnd === "number"
+        ) {
+            parts.push(
+                source.pageStart === source.pageEnd
+                    ? `Page ${source.pageStart}`
+                    : `Pages ${source.pageStart}–${source.pageEnd}`,
+            );
+        } else {
+            parts.push(`Chunk ${source.chunkIndex}`);
+        }
+
+        if (typeof source.similarity === "number") {
+            parts.push(`Similarity ${source.similarity.toFixed(2)}`);
+        }
+
+        return parts.join(" · ");
+    }
+
+    const parts = [`Lines ${source.startLine}–${source.endLine}`];
+
+    if (typeof source.similarity === "number") {
+        parts.push(`Similarity ${source.similarity.toFixed(2)}`);
+    }
+
+    return parts.join(" · ");
+}
+
+function sourceKey(source: ChatSource, index: number): string {
+    if (isFileRagSource(source)) {
+        return `file-${source.filePath}-${source.chunkIndex}-${index}`;
+    }
+
+    return `${source.filePath}-${source.startLine}-${index}`;
 }
 
 export function ChatMessageItem({
@@ -109,13 +151,12 @@ export function ChatMessageItem({
                     <summary>Sources · {sources.length}</summary>
                     <ul>
                         {sources.map((source, index) => (
-                            <li key={`${source.filePath}-${source.startLine}-${index}`}>
-                                <span className="chat-sources-path">{source.filePath}</span>
+                            <li key={sourceKey(source, index)}>
+                                <span className="chat-sources-path">
+                                    {source.filePath}
+                                </span>
                                 <span className="chat-sources-meta">
-                                    Lines {source.startLine}–{source.endLine}
-                                    {typeof source.similarity === "number"
-                                        ? ` · Similarity ${source.similarity.toFixed(2)}`
-                                        : ""}
+                                    {sourceMeta(source)}
                                 </span>
                             </li>
                         ))}

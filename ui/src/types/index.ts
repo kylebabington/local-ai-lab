@@ -41,6 +41,19 @@ export interface RagSource {
     similarity: number;
 }
 
+export interface FileRagSource {
+    sourceType: "file";
+    filePath: string;
+    name: string;
+    rootId: string;
+    chunkIndex: number;
+    similarity: number;
+    pageStart?: number;
+    pageEnd?: number;
+}
+
+export type ChatSource = RagSource | FileRagSource;
+
 export interface ToolUseLine {
     tool: string;
     summary: string;
@@ -59,7 +72,7 @@ export interface ChatMessage {
     role: MessageRole;
     content: string;
     createdAt: string | null;
-    sources?: RagSource[];
+    sources?: ChatSource[];
     toolUses?: ToolUseLine[];
     approval?: PendingApproval | null;
     approvalStatus?: ToolActionStatus;
@@ -72,7 +85,7 @@ export interface ChatRequest {
 
 export interface ChatResponse {
     answer: string;
-    sources?: RagSource[];
+    sources?: ChatSource[];
 }
 
 export interface HealthResponse {
@@ -191,6 +204,49 @@ export interface FileInventoryStatus {
     truncated: boolean;
     truncationReason: string | null;
     scanning: boolean;
+}
+
+export interface FileContentIndexIssue {
+    name: string;
+    relativePath: string;
+    status: string;
+    code: string;
+    message: string;
+}
+
+export interface FileContentIndexStatus {
+    inventoryExists: boolean;
+    inventoryScannedAt: string | null;
+    inventoryFiles: number;
+    indexExists: boolean;
+    indexedAt: string | null;
+    embeddingModel: string;
+    extractorVersion: number | null;
+    indexedFiles: number;
+    reusedFiles: number;
+    chunkCount: number;
+    supportedFiles: number;
+    unsupportedFiles: number;
+    staleFiles: number;
+    tooLargeFiles: number;
+    noTextFiles: number;
+    errorFiles: number;
+    unsafeFiles: number;
+    indexing: boolean;
+    issueCount: number;
+    issues: FileContentIndexIssue[];
+}
+
+export interface FileSemanticMatch {
+    sourceType: "file";
+    filePath: string;
+    name: string;
+    rootId: string;
+    chunkIndex: number;
+    similarity: number;
+    pageStart?: number;
+    pageEnd?: number;
+    preview: string;
 }
 
 export type FileSearchSort = "name" | "modified" | "size";

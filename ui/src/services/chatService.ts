@@ -5,11 +5,41 @@
  * They must not call Ollama or localhost:11434.
  */
 
-import type { ChatRequest, ChatResponse, ChatMessage, RagSource } from "../types";
+import type {
+    ChatRequest,
+    ChatResponse,
+    ChatMessage,
+    ChatSource,
+    FileRagSource,
+    RagSource,
+} from "../types";
 import { apiRequest } from "./http";
 
 function createId(): string {
     return `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function isFileRagSource(source: ChatSource): source is FileRagSource {
+    return "sourceType" in source && source.sourceType === "file";
+}
+
+function mapFileMatches(
+    matches: Array<Partial<FileRagSource> & { filePath?: string }> | undefined,
+): FileRagSource[] {
+    if (!matches) {
+        return [];
+    }
+
+    return matches.map((match) => ({
+        sourceType: "file" as const,
+        filePath: match.filePath ?? "",
+        name: match.name ?? match.filePath ?? "",
+        rootId: match.rootId ?? "",
+        chunkIndex: match.chunkIndex ?? 0,
+        similarity: match.similarity ?? 0,
+        pageStart: match.pageStart,
+        pageEnd: match.pageEnd,
+    }));
 }
 
 export function historyToMessages(
@@ -52,12 +82,26 @@ export async function sendChatMessage(
         throw new Error("Message cannot be empty.");
     }
 
-    if (request.contextMode === "file") {
-        throw new Error("File context is not available yet.");
-    }
-
     if (request.contextMode === "computer") {
         throw new Error("Computer mode must use the agent service.");
+    }
+
+    if (request.contextMode === "file") {
+        const data = await apiRequest<{
+            answer: string;
+            matches?: Array<Partial<FileRagSource> & { filePath?: string }>;
+        }>("/api/files/ask", {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ question: message }),
+        });
+
+        return {
+            answer: data.answer,
+            sources: mapFileMatches(data.matches),
+        };
     }
 
     if (request.contextMode === "project") {
@@ -91,4 +135,4 @@ export async function sendChatMessage(
     };
 }
 
-export { createId };
+export { createId, isFileRagSource };

@@ -1,11 +1,14 @@
 .local-ai-index.json
 chat-history.json
 chat_history.json
+node_modules/
 data/tool-activity.jsonl
 data/file-roots.json
 data/file-inventory.json
+data/file-content-index.json
 .tool-test-sandbox/
 .file-test-sandbox/
+.file-content-test-sandbox/
 
 # Frontend (Vite)
 ui/node_modules/

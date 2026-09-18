@@ -68,7 +68,11 @@ function kickerForMode(mode: ChatContextMode): string {
         return "Project answers are session-only and are not written to chat-history.json";
     }
 
-    return "Normal chat is saved on the backend · Project and Computer stays off that file";
+    if (mode === "file") {
+        return "File mode searches content indexed from folders you explicitly added · File and Project turns are session-only";
+    }
+
+    return "Normal chat is saved on the backend · Project, File, and Computer stay off that file";
 }
 
 export function ChatPage() {
@@ -316,12 +320,12 @@ export function ChatPage() {
                         body={
                             computer
                                 ? "Computer mode can list, search, and read files in allowed folders. Creating, copying, moving, or renaming waits for your approval. These turns are not saved to chat-history.json."
-                                : "Normal chat uses the local Node API and Qwen. Project mode searches the indexed codebase and does not write those turns into chat-history.json."
+                                : "Normal chat uses the local Node API and Qwen. Project mode searches the indexed codebase. File mode searches content indexed from folders you explicitly added. File and Project turns are session-only."
                         }
                         hint={
                             computer
-                                ? "Read tools run on their own. File context is still a later phase."
-                                : "Choose Chat, Project, or Computer next to the composer. File context is still a later phase."
+                                ? "Read tools run on their own. Choose File for document questions over your File Intelligence index."
+                                : "Choose Chat, Project, File, or Computer next to the composer."
                         }
                     />
                 ) : (

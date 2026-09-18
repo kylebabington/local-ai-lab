@@ -12,6 +12,8 @@
 //   lib/ollama.js
 //   lib/agent.js
 //   lib/file-inventory.js
+//   lib/file-content.js
+//   lib/file-rag.js
 //   lib/tools/*
 // =========================================================
 
@@ -49,6 +51,12 @@ import {
     scanInventory,
     searchInventory,
 } from "./lib/file-inventory.js";
+import {
+    buildFileContentIndex,
+    getFileContentIndexStatus,
+    searchFileContent,
+} from "./lib/file-content.js";
+import { askFiles } from "./lib/file-rag.js";
 import {
     describeAllowedRoots,
     listTools,
@@ -533,6 +541,123 @@ async function handleFilesSearchGet(url, response) {
 }
 
 
+async function handleFilesIndexStatusGet(response) {
+    try {
+        const status = await getFileContentIndexStatus();
+        sendJson(response, 200, status);
+    } catch (error) {
+        console.error("GET /api/files/index/status failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, 500),
+            userSafeMessage(error, "Could not load File content index status."),
+        );
+    }
+}
+
+
+async function handleFilesIndexPost(response) {
+    try {
+        const summary = await buildFileContentIndex();
+        sendJson(response, 200, { summary });
+    } catch (error) {
+        console.error("POST /api/files/index failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, errorStatus(error)),
+            userSafeMessage(error, "File content indexing failed."),
+        );
+    }
+}
+
+
+async function handleFilesSemanticSearchPost(request, response) {
+    let body;
+
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    const query = typeof body.query === "string" ? body.query.trim() : "";
+
+    if (!query) {
+        sendError(response, 400, "Query cannot be empty.");
+        return;
+    }
+
+    try {
+        const matches = await searchFileContent(query, {
+            rootId: body.rootId,
+            extension: body.extension,
+            limit: body.limit,
+        });
+
+        sendJson(response, 200, {
+            matches: matches.map((match) => ({
+                sourceType: "file",
+                filePath: match.filePath,
+                name: match.name,
+                rootId: match.rootId,
+                chunkIndex: match.chunkIndex,
+                similarity: match.similarity,
+                pageStart: match.pageStart,
+                pageEnd: match.pageEnd,
+                preview: match.preview,
+            })),
+        });
+    } catch (error) {
+        console.error("POST /api/files/semantic-search failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, errorStatus(error)),
+            userSafeMessage(error, "File semantic search failed."),
+        );
+    }
+}
+
+
+async function handleFilesAskPost(request, response) {
+    let body;
+
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    const question =
+        typeof body.question === "string" ? body.question.trim() : "";
+
+    if (!question) {
+        sendError(response, 400, "Question cannot be empty.");
+        return;
+    }
+
+    try {
+        const result = await askFiles(question, {
+            rootId: body.rootId,
+            extension: body.extension,
+        });
+
+        sendJson(response, 200, {
+            answer: result.answer,
+            matches: result.matches,
+        });
+    } catch (error) {
+        console.error("POST /api/files/ask failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, errorStatus(error)),
+            userSafeMessage(error, "File question failed."),
+        );
+    }
+}
+
+
 async function handleRequest(request, response) {
     const url = new URL(request.url ?? "/", `http://${HOST}:${PORT}`);
     const pathname = url.pathname;
@@ -690,6 +815,42 @@ async function handleRequest(request, response) {
             }
 
             await handleFilesScanPost(response);
+            return;
+        }
+
+        if (pathname === "/api/files/index/status") {
+            if (!requireMethod(request, response, ["GET"])) {
+                return;
+            }
+
+            await handleFilesIndexStatusGet(response);
+            return;
+        }
+
+        if (pathname === "/api/files/index") {
+            if (!requireMethod(request, response, ["POST"])) {
+                return;
+            }
+
+            await handleFilesIndexPost(response);
+            return;
+        }
+
+        if (pathname === "/api/files/semantic-search") {
+            if (!requireMethod(request, response, ["POST"])) {
+                return;
+            }
+
+            await handleFilesSemanticSearchPost(request, response);
+            return;
+        }
+
+        if (pathname === "/api/files/ask") {
+            if (!requireMethod(request, response, ["POST"])) {
+                return;
+            }
+
+            await handleFilesAskPost(request, response);
             return;
         }
 

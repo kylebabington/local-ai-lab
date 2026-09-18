@@ -15,7 +15,7 @@ const OPTIONS: {
     { value: "chat", label: "Chat", enabled: true },
     { value: "project", label: "Project", enabled: true },
     { value: "computer", label: "Computer", enabled: true },
-    { value: "file", label: "File", enabled: false, note: "Phase 4+" },
+    { value: "file", label: "File", enabled: true },
 ];
 
 export function ContextSelector({

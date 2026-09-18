@@ -4,20 +4,50 @@ import type { FormEvent } from "react";
 import { EmptyState } from "../components/EmptyState";
 import {
     addFileRoot,
+    fetchFileContentIndexStatus,
     fetchFileStatus,
+    indexFileContents,
     removeFileRoot,
     scanFileInventory,
     searchFiles,
+    semanticSearchFiles,
 } from "../services/filesService";
 import type {
+    FileContentIndexIssue,
+    FileContentIndexStatus,
     FileInventoryEntry,
     FileInventoryStatus,
     FileRoot,
     FileSearchDirection,
     FileSearchSort,
+    FileSemanticMatch,
 } from "../types";
 
 const PAGE_SIZE = 50;
+
+function formatIssueSummary(issueCount: number): string {
+    if (issueCount === 1) {
+        return "1 file issue";
+    }
+    return `${issueCount} file issues`;
+}
+
+function indexIssuesHeading(issues: FileContentIndexIssue[]): string {
+    if (issues.length === 0) {
+        return "Index issues";
+    }
+
+    const onlyErrors = issues.every((issue) => issue.status === "error");
+    if (onlyErrors) {
+        return issues.length === 1
+            ? "1 file could not be indexed"
+            : `${issues.length} files could not be indexed`;
+    }
+
+    return issues.length === 1
+        ? "1 index issue"
+        : `${issues.length} index issues`;
+}
 
 function formatBytes(bytes: number): string {
     if (!Number.isFinite(bytes) || bytes < 0) {
@@ -61,8 +91,23 @@ function rootLabel(roots: FileRoot[], rootId: string): string {
     return match?.path ?? rootId;
 }
 
+function semanticLocation(match: FileSemanticMatch): string {
+    if (
+        typeof match.pageStart === "number" &&
+        typeof match.pageEnd === "number"
+    ) {
+        return match.pageStart === match.pageEnd
+            ? `Page ${match.pageStart}`
+            : `Pages ${match.pageStart}–${match.pageEnd}`;
+    }
+
+    return `Chunk ${match.chunkIndex}`;
+}
+
 export function FilesPage() {
     const [status, setStatus] = useState<FileInventoryStatus | null>(null);
+    const [contentStatus, setContentStatus] =
+        useState<FileContentIndexStatus | null>(null);
     const [pathInput, setPathInput] = useState("");
     const [query, setQuery] = useState("");
     const [extension, setExtension] = useState("");
@@ -72,15 +117,31 @@ export function FilesPage() {
     const [offset, setOffset] = useState(0);
     const [results, setResults] = useState<FileInventoryEntry[]>([]);
     const [total, setTotal] = useState(0);
+    const [semanticQuery, setSemanticQuery] = useState("");
+    const [semanticMatches, setSemanticMatches] = useState<FileSemanticMatch[]>(
+        [],
+    );
     const [loading, setLoading] = useState(true);
     const [searching, setSearching] = useState(false);
+    const [semanticSearching, setSemanticSearching] = useState(false);
     const [scanning, setScanning] = useState(false);
+    const [indexing, setIndexing] = useState(false);
     const [mutating, setMutating] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [indexNotice, setIndexNotice] = useState<string | null>(null);
+    const [contentIndexError, setContentIndexError] = useState<string | null>(
+        null,
+    );
 
     const refreshStatus = useCallback(async () => {
         const next = await fetchFileStatus();
         setStatus(next);
+        return next;
+    }, []);
+
+    const refreshContentStatus = useCallback(async () => {
+        const next = await fetchFileContentIndexStatus();
+        setContentStatus(next);
         return next;
     }, []);
 
@@ -130,12 +191,14 @@ export function FilesPage() {
         async function load() {
             try {
                 const next = await refreshStatus();
+                const nextContent = await refreshContentStatus();
 
                 if (cancelled) {
                     return;
                 }
 
                 setError(null);
+                void nextContent;
 
                 if (next.inventoryExists) {
                     const data = await searchFiles({
@@ -171,7 +234,7 @@ export function FilesPage() {
         return () => {
             cancelled = true;
         };
-    }, [refreshStatus]);
+    }, [refreshStatus, refreshContentStatus]);
 
     async function handleAddRoot(event: FormEvent) {
         event.preventDefault();
@@ -182,6 +245,7 @@ export function FilesPage() {
             await addFileRoot(pathInput);
             setPathInput("");
             const next = await refreshStatus();
+            await refreshContentStatus();
             await runSearch(0, next);
         } catch (caught) {
             setError(
@@ -206,6 +270,7 @@ export function FilesPage() {
             }
 
             const next = await refreshStatus();
+            await refreshContentStatus();
             await runSearch(0, next);
         } catch (caught) {
             setError(
@@ -225,6 +290,7 @@ export function FilesPage() {
         try {
             await scanFileInventory();
             const next = await refreshStatus();
+            await refreshContentStatus();
             await runSearch(0, next);
         } catch (caught) {
             setError(
@@ -237,30 +303,94 @@ export function FilesPage() {
         }
     }
 
+    async function handleContentIndex() {
+        setIndexing(true);
+        setError(null);
+        setContentIndexError(null);
+        setIndexNotice(null);
+        const preservedIndexExisted = Boolean(contentStatus?.indexExists);
+
+        try {
+            await indexFileContents();
+            const nextStatus = await refreshContentStatus();
+            const issueCount = nextStatus.issueCount ?? 0;
+            setIndexNotice(
+                issueCount > 0
+                    ? `Index completed with ${formatIssueSummary(issueCount)}`
+                    : "Index completed successfully",
+            );
+        } catch (caught) {
+            const detail =
+                caught instanceof Error
+                    ? caught.message
+                    : "Could not complete content indexing.";
+            const preserveNote = preservedIndexExisted
+                ? " The previous valid content index was preserved."
+                : "";
+            setContentIndexError(`${detail}${preserveNote}`);
+            setIndexNotice(null);
+            try {
+                await refreshContentStatus();
+            } catch {
+                // ignore secondary refresh failure
+            }
+        } finally {
+            setIndexing(false);
+        }
+    }
+
     async function handleSearchSubmit(event: FormEvent) {
         event.preventDefault();
         await runSearch(0);
     }
 
+    async function handleSemanticSearch(event: FormEvent) {
+        event.preventDefault();
+        setSemanticSearching(true);
+        setError(null);
+
+        try {
+            const matches = await semanticSearchFiles({
+                query: semanticQuery,
+                rootId: rootFilter || undefined,
+                extension: extension || undefined,
+                limit: 6,
+            });
+            setSemanticMatches(matches);
+        } catch (caught) {
+            setSemanticMatches([]);
+            setError(
+                caught instanceof Error
+                    ? caught.message
+                    : "Semantic search failed.",
+            );
+        } finally {
+            setSemanticSearching(false);
+        }
+    }
+
     const roots = status?.roots ?? [];
     const hasRoots = roots.length > 0;
     const hasInventory = Boolean(status?.inventoryExists);
-    const busy = loading || mutating || scanning;
+    const busy = loading || mutating || scanning || indexing;
+    const staleCount = contentStatus?.staleFiles ?? 0;
 
     return (
         <section className="page" aria-labelledby="files-heading">
             <header className="page-toolbar">
                 <div>
                     <h1 id="files-heading">Files</h1>
-                    <p className="page-kicker">Metadata inventory</p>
+                    <p className="page-kicker">
+                        Metadata inventory and content index
+                    </p>
                 </div>
             </header>
 
             <div className="page-stack">
                 <p className="lede">
-                    Explicitly choose local folders for read-only metadata
-                    scanning. Local AI does not modify files in these folders,
-                    and File chat context stays unavailable until a later phase.
+                    Explicitly choose local folders for read-only scanning and
+                    content indexing. Local AI does not modify files in these
+                    folders. Chat File mode answers from indexed content only.
                 </p>
 
                 {error ? (
@@ -280,12 +410,23 @@ export function FilesPage() {
                     </div>
                 ) : null}
 
+                {staleCount > 0 ? (
+                    <div className="banner banner-info" role="status">
+                        <strong>Stale files detected</strong>
+                        <p>
+                            Some files changed since the metadata scan
+                            ({staleCount}). Scan folders again before re-indexing
+                            content.
+                        </p>
+                    </div>
+                ) : null}
+
                 <article className="info-card files-section">
                     <h2>Folders</h2>
                     <p className="files-section-copy">
-                        Adding a folder permits read-only metadata scanning
-                        (names, paths, sizes, dates). It does not grant write
-                        access or Computer-mode mutation rights.
+                        Adding a folder permits read-only metadata scanning and
+                        content indexing. It does not grant write access or
+                        Computer-mode mutation rights.
                     </p>
 
                     <form className="files-root-form" onSubmit={handleAddRoot}>
@@ -327,7 +468,7 @@ export function FilesPage() {
                                             {root.path}
                                         </p>
                                         <p className="activity-detail">
-                                            Read-only metadata root
+                                            Read-only File Intelligence root
                                         </p>
                                     </div>
                                     <button
@@ -369,7 +510,7 @@ export function FilesPage() {
                                 </dd>
                             </div>
                             <div>
-                                <dt>Files</dt>
+                                <dt>Metadata files</dt>
                                 <dd>{status?.fileCount ?? 0}</dd>
                             </div>
                             <div>
@@ -396,9 +537,145 @@ export function FilesPage() {
                     </button>
                 </article>
 
+                <article className="info-card files-section">
+                    <h2>Content index</h2>
+                    <p className="files-section-copy">
+                        Extracts supported text, DOCX, and PDF content from the
+                        metadata inventory, then embeds chunks for File mode.
+                    </p>
+
+                    {!hasInventory ? (
+                        <EmptyState
+                            title="Scan folders first"
+                            body="Content indexing needs a Phase 4A metadata inventory before it can run."
+                        />
+                    ) : (
+                        <>
+                            <dl className="files-summary">
+                                <div>
+                                    <dt>Last content index</dt>
+                                    <dd>
+                                        {contentStatus?.indexedAt
+                                            ? formatModified(
+                                                  contentStatus.indexedAt,
+                                              )
+                                            : "Not built yet"}
+                                    </dd>
+                                </div>
+                                <div>
+                                    <dt>Embedding model</dt>
+                                    <dd>
+                                        {contentStatus?.embeddingModel ?? "—"}
+                                    </dd>
+                                </div>
+                                <div>
+                                    <dt>Indexed files</dt>
+                                    <dd>
+                                        {contentStatus?.indexedFiles ?? 0}
+                                    </dd>
+                                </div>
+                                <div>
+                                    <dt>Chunks</dt>
+                                    <dd>{contentStatus?.chunkCount ?? 0}</dd>
+                                </div>
+                                <div>
+                                    <dt>Unsupported</dt>
+                                    <dd>
+                                        {contentStatus?.unsupportedFiles ?? 0}
+                                    </dd>
+                                </div>
+                                <div>
+                                    <dt>Stale</dt>
+                                    <dd>{contentStatus?.staleFiles ?? 0}</dd>
+                                </div>
+                                <div>
+                                    <dt>Too large</dt>
+                                    <dd>
+                                        {contentStatus?.tooLargeFiles ?? 0}
+                                    </dd>
+                                </div>
+                                <div>
+                                    <dt>No text</dt>
+                                    <dd>{contentStatus?.noTextFiles ?? 0}</dd>
+                                </div>
+                                <div>
+                                    <dt>Errors</dt>
+                                    <dd>{contentStatus?.errorFiles ?? 0}</dd>
+                                </div>
+                            </dl>
+
+                            {contentIndexError ? (
+                                <div
+                                    className="banner banner-error"
+                                    role="alert"
+                                >
+                                    <strong>Content indexing failed</strong>
+                                    <p>{contentIndexError}</p>
+                                </div>
+                            ) : null}
+
+                            {indexNotice && !contentIndexError ? (
+                                <p
+                                    className="files-index-notice"
+                                    role="status"
+                                >
+                                    {indexNotice}
+                                </p>
+                            ) : null}
+
+                            {(contentStatus?.issueCount ?? 0) > 0 ? (
+                                <details className="files-index-issues">
+                                    <summary>
+                                        Index issues
+                                        {contentStatus &&
+                                        contentStatus.issueCount >
+                                            contentStatus.issues.length
+                                            ? ` (${contentStatus.issues.length} of ${contentStatus.issueCount})`
+                                            : ` (${contentStatus?.issueCount ?? 0})`}
+                                    </summary>
+                                    <p className="files-index-issues-heading">
+                                        {indexIssuesHeading(
+                                            contentStatus?.issues ?? [],
+                                        )}
+                                    </p>
+                                    <ul className="files-index-issue-list">
+                                        {(contentStatus?.issues ?? []).map(
+                                            (issue) => (
+                                                <li
+                                                    key={`${issue.relativePath}:${issue.status}:${issue.code}`}
+                                                >
+                                                    <p className="files-index-issue-name">
+                                                        {issue.name ||
+                                                            issue.relativePath}
+                                                    </p>
+                                                    <p className="files-index-issue-message">
+                                                        {issue.message}
+                                                    </p>
+                                                </li>
+                                            ),
+                                        )}
+                                    </ul>
+                                </details>
+                            ) : null}
+                        </>
+                    )}
+
+                    <button
+                        type="button"
+                        className="btn btn-primary"
+                        disabled={!hasInventory || busy}
+                        onClick={() => void handleContentIndex()}
+                    >
+                        {indexing ? "Indexing…" : "Index file contents"}
+                    </button>
+                </article>
+
                 {hasInventory ? (
                     <article className="info-card files-section">
                         <h2>Search</h2>
+                        <p className="files-section-copy">
+                            Filename and path search over the metadata inventory.
+                        </p>
 
                         <form
                             className="files-search-form"
@@ -592,6 +869,83 @@ export function FilesPage() {
                                     </div>
                                 </div>
                             </>
+                        ) : null}
+                    </article>
+                ) : null}
+
+                {contentStatus?.indexExists ? (
+                    <article className="info-card files-section">
+                        <h2>Search file contents by meaning</h2>
+                        <p className="files-section-copy">
+                            Semantic retrieval over indexed chunks. This does not
+                            call Qwen — use Chat File mode for grounded answers.
+                        </p>
+
+                        <form
+                            className="files-search-form"
+                            onSubmit={(event) =>
+                                void handleSemanticSearch(event)
+                            }
+                        >
+                            <label className="files-field">
+                                <span>Meaning query</span>
+                                <input
+                                    type="search"
+                                    value={semanticQuery}
+                                    onChange={(event) =>
+                                        setSemanticQuery(event.target.value)
+                                    }
+                                    placeholder="Which file mentions Kubernetes experience?"
+                                    disabled={busy || semanticSearching}
+                                />
+                            </label>
+                            <button
+                                type="submit"
+                                className="btn btn-primary"
+                                disabled={
+                                    busy ||
+                                    semanticSearching ||
+                                    !semanticQuery.trim()
+                                }
+                            >
+                                {semanticSearching
+                                    ? "Searching…"
+                                    : "Semantic search"}
+                            </button>
+                        </form>
+
+                        {!semanticSearching &&
+                        semanticMatches.length === 0 &&
+                        semanticQuery.trim() ? (
+                            <EmptyState
+                                title="No semantic matches"
+                                body="No indexed chunks matched this query."
+                            />
+                        ) : null}
+
+                        {semanticMatches.length > 0 ? (
+                            <ul className="files-root-list">
+                                {semanticMatches.map((match) => (
+                                    <li
+                                        key={`${match.rootId}:${match.filePath}:${match.chunkIndex}`}
+                                        className="files-root-item"
+                                    >
+                                        <div>
+                                            <p className="files-root-path">
+                                                {match.filePath}
+                                            </p>
+                                            <p className="activity-detail">
+                                                {semanticLocation(match)} ·
+                                                Similarity{" "}
+                                                {match.similarity.toFixed(2)}
+                                            </p>
+                                            <p className="files-section-copy">
+                                                {match.preview}
+                                            </p>
+                                        </div>
+                                    </li>
+                                ))}
+                            </ul>
                         ) : null}
                     </article>
                 ) : null}
