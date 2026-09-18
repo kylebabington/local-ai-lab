@@ -690,6 +690,74 @@ function testExpandWithCrossReferences() {
         throw new Error(`Budget 2 should stay 2, got ${bounded.length}`);
     }
 
+    const healthDef = makeSynthChunk(
+        "ollama.js",
+        1,
+        0.9,
+        "export async function getInstalledModelNames() {\n  return [];\n}",
+    );
+    const healthMid = makeSynthChunk(
+        "mid.js",
+        1,
+        0.55,
+        "export function formatBanner() {\n  return 1;\n}",
+    );
+    const healthDocs = makeSynthChunk(
+        "notes.md",
+        1,
+        0.8,
+        "Health checks confirm Ollama is running.",
+    );
+    const healthCall = makeSynthChunk(
+        "server.js",
+        10,
+        0.34,
+        "const names = await getInstalledModelNames();\nexport async function handleHealth() {\n  return names;\n}",
+    );
+    const healthExpanded = expandWithCrossReferences(
+        [healthDef, healthMid, healthDocs],
+        [healthDef, healthMid, healthDocs, healthCall],
+        3,
+    );
+    const healthFiles = healthExpanded.map((item) => item.filePath);
+
+    if (!healthFiles.includes("server.js")) {
+        throw new Error("Cross-file helper call should replace incidental Markdown.");
+    }
+
+    if (healthFiles.includes("notes.md")) {
+        throw new Error("Helper call site should outrank Markdown.");
+    }
+
+    const routeServer = makeSynthChunk(
+        "server.js",
+        40,
+        0.88,
+        'if (pathname === "/api/health") {\n  await handleHealth(response);\n}',
+    );
+    const routeDocs = makeSynthChunk(
+        "notes.md",
+        1,
+        0.7,
+        "The UI polls application health.",
+    );
+    const routeUi = makeSynthChunk(
+        "statusService.ts",
+        1,
+        0.31,
+        'export async function fetchHealth() {\n  return fetch("/api/health");\n}',
+    );
+    const routeExpanded = expandWithCrossReferences(
+        [routeServer, routeDocs],
+        [routeServer, routeDocs, routeUi],
+        2,
+    );
+    const routeFiles = routeExpanded.map((item) => item.filePath);
+
+    if (!routeFiles.includes("statusService.ts")) {
+        throw new Error("Shared /api/ route literals should promote the HTTP client.");
+    }
+
     pass("cross-reference expansion is generic and bounded");
 }
 
