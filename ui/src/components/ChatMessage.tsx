@@ -1,6 +1,12 @@
 import { ToolActionCard } from "./ToolActionCard";
-import { isFileRagSource } from "../services/chatService";
-import type { ChatMessage, ChatSource, PendingApproval, ToolAction } from "../types";
+import { isFileRagSource, isMemorySource } from "../services/chatService";
+import type {
+    ChatMessage,
+    ChatSource,
+    MemorySource,
+    PendingApproval,
+    ToolAction,
+} from "../types";
 
 interface ChatMessageItemProps {
     message: ChatMessage;
@@ -78,6 +84,20 @@ function approvalToAction(
 }
 
 function sourceMeta(source: ChatSource): string {
+    if (isMemorySource(source)) {
+        const parts: string[] = [];
+        const modes = (source.contextModes ?? [])
+            .map((mode) => modeLabel(mode) ?? mode)
+            .join(", ");
+        if (modes) {
+            parts.push(modes);
+        }
+        if (typeof source.similarity === "number") {
+            parts.push(`Similarity ${source.similarity.toFixed(2)}`);
+        }
+        return parts.join(" · ");
+    }
+
     if (isFileRagSource(source)) {
         const parts: string[] = [];
 
@@ -111,11 +131,40 @@ function sourceMeta(source: ChatSource): string {
 }
 
 function sourceKey(source: ChatSource, index: number): string {
+    if (isMemorySource(source)) {
+        return `memory-${source.chunkId}-${index}`;
+    }
+
     if (isFileRagSource(source)) {
         return `file-${source.filePath}-${source.chunkIndex}-${index}`;
     }
 
     return `${source.filePath}-${source.startLine}-${index}`;
+}
+
+function memoryDateLabel(source: MemorySource): string {
+    const stamp = source.startedAt ?? source.endedAt;
+    if (!stamp) {
+        return "Unknown date";
+    }
+
+    const date = new Date(stamp);
+    if (Number.isNaN(date.getTime())) {
+        return "Unknown date";
+    }
+
+    return date.toLocaleDateString([], {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+    });
+}
+
+function memoryModeLabel(source: MemorySource): string {
+    const modes = (source.contextModes ?? [])
+        .map((mode) => modeLabel(mode) ?? mode)
+        .filter(Boolean);
+    return modes.length > 0 ? modes.join(", ") : "Chat";
 }
 
 export function ChatMessageItem({
@@ -125,6 +174,8 @@ export function ChatMessageItem({
     onReject,
 }: ChatMessageItemProps) {
     const sources = message.sources ?? [];
+    const memorySources = sources.filter(isMemorySource);
+    const otherSources = sources.filter((source) => !isMemorySource(source));
     const toolUses = message.toolUses ?? [];
     const hasTime = Boolean(message.createdAt);
     const approval = message.approval;
@@ -174,14 +225,31 @@ export function ChatMessageItem({
                     onReject={onReject}
                 />
             ) : null}
-            {sources.length > 0 ? (
-                <details className="chat-sources">
-                    <summary>Sources · {sources.length}</summary>
+            {memorySources.length > 0 ? (
+                <details className="chat-sources chat-memory-sources">
+                    <summary>Memory · {memorySources.length}</summary>
                     <ul>
-                        {sources.map((source, index) => (
+                        {memorySources.map((source, index) => (
                             <li key={sourceKey(source, index)}>
                                 <span className="chat-sources-path">
-                                    {source.filePath}
+                                    {memoryDateLabel(source)} · {memoryModeLabel(source)}
+                                </span>
+                                <span className="chat-sources-meta">
+                                    {source.preview || sourceMeta(source)}
+                                </span>
+                            </li>
+                        ))}
+                    </ul>
+                </details>
+            ) : null}
+            {otherSources.length > 0 ? (
+                <details className="chat-sources">
+                    <summary>Sources · {otherSources.length}</summary>
+                    <ul>
+                        {otherSources.map((source, index) => (
+                            <li key={sourceKey(source, index)}>
+                                <span className="chat-sources-path">
+                                    {"filePath" in source ? source.filePath : ""}
                                 </span>
                                 <span className="chat-sources-meta">
                                     {sourceMeta(source)}

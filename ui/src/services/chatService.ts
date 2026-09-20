@@ -11,6 +11,7 @@ import type {
     ChatMessage,
     ChatSource,
     FileRagSource,
+    MemorySource,
     RagSource,
     ToolActionStatus,
     PendingApproval,
@@ -24,6 +25,31 @@ function createId(): string {
 
 function isFileRagSource(source: ChatSource): source is FileRagSource {
     return "sourceType" in source && source.sourceType === "file";
+}
+
+function isMemorySource(source: ChatSource): source is MemorySource {
+    return "sourceType" in source && source.sourceType === "memory";
+}
+
+function mapMemorySources(
+    sources: Array<Partial<MemorySource>> | undefined,
+): MemorySource[] {
+    if (!sources) {
+        return [];
+    }
+
+    return sources
+        .filter((source) => source.sourceType === "memory")
+        .map((source) => ({
+            sourceType: "memory" as const,
+            memoryId: source.memoryId ?? "",
+            chunkId: source.chunkId ?? "",
+            similarity: source.similarity ?? 0,
+            startedAt: source.startedAt ?? null,
+            endedAt: source.endedAt ?? null,
+            contextModes: source.contextModes ?? [],
+            preview: source.preview ?? "",
+        }));
 }
 
 function mapFileMatches(
@@ -246,17 +272,25 @@ export async function sendChatMessage(
         };
     }
 
-    const data = await apiRequest<{ answer: string }>("/api/chat", {
+    const data = await apiRequest<{
+        answer: string;
+        sources?: Array<Partial<MemorySource>>;
+        memoryWarning?: string;
+    }>("/api/chat", {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
         },
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({
+            message,
+            excludeMessageIds: request.excludeMessageIds ?? [],
+        }),
     });
 
     return {
         answer: data.answer,
+        sources: mapMemorySources(data.sources),
     };
 }
 
-export { createId, isFileRagSource, transcriptToMessages };
+export { createId, isFileRagSource, isMemorySource, transcriptToMessages };

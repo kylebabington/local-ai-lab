@@ -482,6 +482,28 @@ h3 {
     padding: var(--space-5);
 }
 
+.status-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    gap: var(--space-4);
+    margin: var(--space-4) 0 0;
+}
+
+.status-grid div {
+    margin: 0;
+}
+
+.status-grid dt {
+    margin: 0;
+    font-size: 0.82rem;
+    color: var(--text-muted);
+}
+
+.status-grid dd {
+    margin: 0.25rem 0 0;
+    font-size: 1.05rem;
+}
+
 .plain-list {
     margin: var(--space-3) 0 0;
     padding-left: 1.1rem;

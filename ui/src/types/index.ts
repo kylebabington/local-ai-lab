@@ -56,7 +56,18 @@ export interface FileRagSource {
     pageEnd?: number;
 }
 
-export type ChatSource = RagSource | FileRagSource;
+export interface MemorySource {
+    sourceType: "memory";
+    memoryId: string;
+    chunkId: string;
+    similarity: number;
+    startedAt: string | null;
+    endedAt: string | null;
+    contextModes: ChatContextMode[];
+    preview: string;
+}
+
+export type ChatSource = RagSource | FileRagSource | MemorySource;
 
 export interface ToolUseLine {
     tool: string;
@@ -86,6 +97,7 @@ export interface ChatMessage {
 export interface ChatRequest {
     message: string;
     contextMode: ChatContextMode;
+    excludeMessageIds?: string[];
 }
 
 export interface ChatResponse {
@@ -252,6 +264,17 @@ export interface FileSemanticMatch {
     pageStart?: number;
     pageEnd?: number;
     preview: string;
+}
+
+export interface ConversationMemoryStatus {
+    indexExists: boolean;
+    indexedAt: string | null;
+    transcriptMessages: number;
+    memoryUnits: number;
+    chunks: number;
+    stale: boolean;
+    embeddingModel: string;
+    syncRunning?: boolean;
 }
 
 export type FileSearchSort = "name" | "modified" | "size";

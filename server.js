@@ -9,6 +9,7 @@
 // Shared logic:
 //   lib/chat.js
 //   lib/conversation-transcript.js
+//   lib/conversation-memory.js
 //   lib/rag.js
 //   lib/ollama.js
 //   lib/agent.js
@@ -51,6 +52,16 @@ import {
     initializeTranscript,
     patchMessage,
 } from "./lib/conversation-transcript.js";
+
+import {
+    buildConversationMemoryIndex,
+    clearConversationMemory,
+    getConversationMemoryStatus,
+    initializeConversationMemory,
+    retrieveMemoryForChat,
+    scheduleConversationMemorySync,
+    searchConversationMemory,
+} from "./lib/conversation-memory.js";
 
 import { readActivity } from "./lib/activity.js";
 import {
@@ -279,9 +290,32 @@ async function handleChatPost(request, response) {
         return;
     }
 
+    const excludeMessageIds = Array.isArray(body.excludeMessageIds)
+        ? body.excludeMessageIds
+        : [];
+
     try {
-        const result = await sendChatMessage(message);
-        sendJson(response, 200, { answer: result.answer });
+        const memory = await retrieveMemoryForChat(message, {
+            excludeMessageIds,
+        });
+
+        const result = await sendChatMessage(message, {
+            temporarySystemMessages: memory.temporarySystemMessages,
+        });
+
+        const payload = {
+            answer: result.answer,
+        };
+
+        if (memory.sources.length > 0) {
+            payload.sources = memory.sources;
+        }
+
+        if (memory.warnings.length > 0) {
+            payload.memoryWarning = memory.warnings.join(" ");
+        }
+
+        sendJson(response, 200, payload);
     } catch (error) {
         console.error("POST /api/chat failed:", error.message);
         sendError(
@@ -347,6 +381,9 @@ async function handleTranscriptMessagesPost(request, response) {
             appended: result.appended,
             messages: result.messages,
         });
+        if (result.appended > 0) {
+            scheduleConversationMemorySync();
+        }
     } catch (error) {
         console.error("POST /api/transcript/messages failed:", error.message);
         sendError(
@@ -375,6 +412,12 @@ async function handleTranscriptMessagePatch(request, response, id) {
             message: result.message,
             messages: result.messages,
         });
+
+        // Content edits need re-index; approval-only patches do not
+        // change the memory-relevant fingerprint.
+        if (typeof body.content === "string") {
+            scheduleConversationMemorySync();
+        }
     } catch (error) {
         console.error(
             `PATCH /api/transcript/messages/${id} failed:`,
@@ -392,12 +435,13 @@ async function handleTranscriptMessagePatch(request, response, id) {
 async function handleTranscriptDelete(response) {
     try {
         // Safety order: cancel live approvals first, then Chat
-        // model memory, then the visible transcript. If chat clear
-        // fails, leave the transcript intact so model memory and UI
-        // do not diverge silently.
+        // model memory, then the visible transcript, then derived
+        // Conversation Memory. If chat clear fails, leave the
+        // transcript intact so model memory and UI do not diverge.
         await clearPendingApprovals();
         await clearChatHistory();
         await clearTranscript();
+        await clearConversationMemory();
         sendJson(response, 200, { ok: true });
     } catch (error) {
         console.error("DELETE /api/transcript failed:", error.message);
@@ -405,6 +449,108 @@ async function handleTranscriptDelete(response) {
             response,
             500,
             userSafeMessage(error, "Could not clear the conversation."),
+        );
+    }
+}
+
+
+async function handleMemoryStatusGet(response) {
+    try {
+        const status = await getConversationMemoryStatus();
+        sendJson(response, 200, {
+            indexExists: status.indexExists,
+            indexedAt: status.indexedAt,
+            transcriptMessages: status.transcriptMessages,
+            memoryUnits: status.memoryUnits,
+            chunks: status.chunks,
+            stale: status.stale,
+            embeddingModel: status.embeddingModel,
+            syncRunning: status.syncRunning,
+        });
+    } catch (error) {
+        console.error("GET /api/memory/status failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, 500),
+            userSafeMessage(error, "Could not load conversation memory status."),
+        );
+    }
+}
+
+
+async function handleMemoryIndexPost(response) {
+    try {
+        const result = await buildConversationMemoryIndex();
+        const status = await getConversationMemoryStatus();
+        sendJson(response, 200, {
+            ok: true,
+            ...result,
+            status: {
+                indexExists: status.indexExists,
+                indexedAt: status.indexedAt,
+                transcriptMessages: status.transcriptMessages,
+                memoryUnits: status.memoryUnits,
+                chunks: status.chunks,
+                stale: status.stale,
+                embeddingModel: status.embeddingModel,
+            },
+        });
+    } catch (error) {
+        console.error("POST /api/memory/index failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, errorStatus(error)),
+            userSafeMessage(
+                error,
+                "Could not rebuild conversation memory. Transcript was not changed.",
+            ),
+        );
+    }
+}
+
+
+async function handleMemorySearchPost(request, response) {
+    let body;
+
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    const query = typeof body.query === "string" ? body.query.trim() : "";
+
+    if (!query) {
+        sendError(response, 400, "Memory search query cannot be empty.");
+        return;
+    }
+
+    try {
+        const result = await searchConversationMemory(query, {
+            topK: body.topK,
+            excludeMessageIds: body.excludeMessageIds,
+        });
+
+        sendJson(response, 200, {
+            results: result.results.map((item) => ({
+                memoryId: item.memoryId,
+                chunkId: item.chunkId,
+                similarity: item.similarity,
+                startedAt: item.startedAt,
+                endedAt: item.endedAt,
+                contextModes: item.contextModes,
+                messages: item.messages,
+                preview: item.preview,
+            })),
+            temporal: result.temporal,
+        });
+    } catch (error) {
+        console.error("POST /api/memory/search failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, errorStatus(error)),
+            userSafeMessage(error, "Conversation memory search failed."),
         );
     }
 }
@@ -856,6 +1002,33 @@ async function handleRequest(request, response) {
             }
         }
 
+        if (pathname === "/api/memory/status") {
+            if (!requireMethod(request, response, ["GET"])) {
+                return;
+            }
+
+            await handleMemoryStatusGet(response);
+            return;
+        }
+
+        if (pathname === "/api/memory/index") {
+            if (!requireMethod(request, response, ["POST"])) {
+                return;
+            }
+
+            await handleMemoryIndexPost(response);
+            return;
+        }
+
+        if (pathname === "/api/memory/search") {
+            if (!requireMethod(request, response, ["POST"])) {
+                return;
+            }
+
+            await handleMemorySearchPost(request, response);
+            return;
+        }
+
         if (pathname === "/api/rag") {
             if (!requireMethod(request, response, ["POST"])) {
                 return;
@@ -1030,6 +1203,7 @@ async function handleRequest(request, response) {
 async function main() {
     const { loaded } = await initializeChat();
     const transcriptInit = await initializeTranscript();
+    await initializeConversationMemory();
 
     const server = http.createServer(handleRequest);
 
@@ -1046,6 +1220,7 @@ async function main() {
         } else {
             console.log("Conversation transcript ready.");
         }
+        console.log("Conversation Memory ready.");
     });
 }
 

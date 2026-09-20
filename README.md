@@ -26,6 +26,7 @@ interfaces
 shared logic
 ├── lib/chat.js     normal chat + chat-history.json (model context)
 ├── lib/conversation-transcript.js  UI transcript (display only)
+├── lib/conversation-memory.js  derived semantic memory over the transcript
 ├── lib/rag.js      project retrieval
 ├── lib/agent.js    Computer-mode tools + approvals
 ├── lib/activity.js tool audit log
@@ -43,6 +44,7 @@ The browser never calls `localhost:11434`.
 
 * `lib/chat.js` — Chat-mode model conversation (`chat-history.json`)
 * `lib/conversation-transcript.js` — unified UI transcript (`data/conversation-transcript.json`)
+* `lib/conversation-memory.js` — derived Conversation Memory index (`data/conversation-memory-index.json`)
 * `lib/rag.js` — scan, chunk, index, search, and ask about the project
 * `lib/agent.js` — Computer-mode tool loop and pending approvals
 * `lib/tools/` — root-scoped filesystem tools and path checks
@@ -54,6 +56,8 @@ The browser never calls `localhost:11434`.
 * `ui/` — React interface
 
 The Chat page shows one chronological transcript for Chat, Project, File, and Computer. That display transcript is separate from model context: only Chat mode writes to `chat-history.json`. Project/File/Computer turns are never merged into normal Chat history, and the unified transcript is never sent to every model.
+
+Conversation Memory is a disposable semantic index over the transcript. Normal Chat can retrieve a few relevant past turns as temporary system context. The memory index stores embeddings and character-span references only — not a second copy of the conversation. Rebuilding or deleting the memory index never destroys the transcript.
 
 File context in the UI uses File Intelligence indexes. The terminal `/load` command continues to work and is not exposed over HTTP.
 
@@ -188,9 +192,18 @@ Useful commands inside the chat:
 
 * Normal chat model messages are saved to `chat-history.json`
 * The Chat page UI transcript is saved to `data/conversation-transcript.json` (all modes)
+* Conversation Memory is derived into `data/conversation-memory-index.json` (embeddings + span references only)
 * Loaded file contents are **not** written into either store
 * `/rag` retrieved chunks are **not** written into Chat model history or the UI transcript
-* Clear conversation cancels pending Computer approvals, resets Chat model history, and empties the transcript
+* Clear conversation cancels pending Computer approvals, resets Chat model history, empties the transcript, and resets Conversation Memory
+
+### Conversation Memory
+
+* Indexes mixed-mode transcript turns for semantic recall weeks or months later
+* Syncs after transcript writes; transcript persistence never depends on embeddings
+* Injects a small retrieved context into normal Chat only (not Computer / Project / File ask paths)
+* APIs: `GET /api/memory/status`, `POST /api/memory/index`, `POST /api/memory/search`
+* Verify with `npm run verify:memory`
 
 ---
 
@@ -336,7 +349,7 @@ That keeps answers more grounded in the real project files and avoids stuffing t
 
 ## Notes
 
-* `.local-ai-index.json`, `chat-history.json`, `data/conversation-transcript.json`, and `data/tool-activity.jsonl` are ignored by git.
+* `.local-ai-index.json`, `chat-history.json`, `data/conversation-transcript.json`, `data/conversation-memory-index.json`, and `data/tool-activity.jsonl` are ignored by git.
 * Sensitive files named `.env` or `.env.*` are never indexed.
 * Retrieved project text is treated as data, not instructions.
 * Lock files and common generated folders are skipped during scanning.

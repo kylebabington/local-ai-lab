@@ -234,6 +234,7 @@ export function ChatPage() {
                 const response = await sendChatMessage({
                     message: text,
                     contextMode,
+                    excludeMessageIds: [userMessage.id],
                 });
                 const assistantMessage: ChatMessage = {
                     id: createId(),
@@ -410,7 +411,7 @@ export function ChatPage() {
                     <EmptyState
                         title="Ask your computer"
                         body="One shared transcript keeps Chat, Project, File, and Computer turns in order. The context selector only changes how the next message is processed."
-                        hint="Choose Chat, Project, File, or Computer next to the composer. Clear conversation wipes the transcript, Chat memory, and pending Computer approvals."
+                        hint="Choose Chat, Project, File, or Computer next to the composer. Clear conversation wipes the transcript, Chat memory, Conversation Memory, and pending Computer approvals."
                     />
                 ) : (
                     messages.map((message) => (
