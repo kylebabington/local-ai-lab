@@ -30,7 +30,11 @@ export type ToolPermission =
 
 export type ToolPermissionLevel = "read-only" | "approval-required" | "high-risk";
 
-export type ToolActionStatus = "pending" | "approved" | "rejected";
+export type ToolActionStatus =
+    | "pending"
+    | "approved"
+    | "rejected"
+    | "expired";
 
 export type AgentStatus = "complete" | "approval_required";
 
@@ -72,6 +76,7 @@ export interface ChatMessage {
     role: MessageRole;
     content: string;
     createdAt: string | null;
+    contextMode?: ChatContextMode;
     sources?: ChatSource[];
     toolUses?: ToolUseLine[];
     approval?: PendingApproval | null;

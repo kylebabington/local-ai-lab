@@ -8,6 +8,7 @@
 //
 // Shared logic:
 //   lib/chat.js
+//   lib/conversation-transcript.js
 //   lib/rag.js
 //   lib/ollama.js
 //   lib/agent.js
@@ -37,10 +38,19 @@ import { askProject } from "./lib/rag.js";
 
 import {
     approveById,
+    clearPendingApprovals,
     listPendingApprovals,
     rejectById,
     runAgent,
 } from "./lib/agent.js";
+
+import {
+    appendMessages,
+    clearTranscript,
+    getTranscript,
+    initializeTranscript,
+    patchMessage,
+} from "./lib/conversation-transcript.js";
 
 import { readActivity } from "./lib/activity.js";
 import {
@@ -134,6 +144,9 @@ function clientErrorStatus(error, fallback = 400) {
         message.includes("inside") ||
         message.includes("Unknown") ||
         message.includes("Malformed") ||
+        message.includes("malformed") ||
+        message.includes("exceed") ||
+        message.includes("invalid") ||
         message.includes("Add at least one")
     ) {
         return fallback;
@@ -297,6 +310,101 @@ async function handleChatHistoryDelete(response) {
             response,
             500,
             userSafeMessage(error, "Could not clear chat history."),
+        );
+    }
+}
+
+
+async function handleTranscriptGet(response) {
+    try {
+        const result = await getTranscript();
+        sendJson(response, 200, { messages: result.messages });
+    } catch (error) {
+        console.error("GET /api/transcript failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, 500),
+            userSafeMessage(error, "Could not load conversation transcript."),
+        );
+    }
+}
+
+
+async function handleTranscriptMessagesPost(request, response) {
+    let body;
+
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    try {
+        const result = await appendMessages(body.messages);
+        sendJson(response, 200, {
+            ok: true,
+            appended: result.appended,
+            messages: result.messages,
+        });
+    } catch (error) {
+        console.error("POST /api/transcript/messages failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, errorStatus(error)),
+            userSafeMessage(error, "Could not save conversation messages."),
+        );
+    }
+}
+
+
+async function handleTranscriptMessagePatch(request, response, id) {
+    let body;
+
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    try {
+        const result = await patchMessage(id, body);
+        sendJson(response, 200, {
+            ok: true,
+            message: result.message,
+            messages: result.messages,
+        });
+    } catch (error) {
+        console.error(
+            `PATCH /api/transcript/messages/${id} failed:`,
+            error.message,
+        );
+        sendError(
+            response,
+            clientErrorStatus(error, errorStatus(error)),
+            userSafeMessage(error, "Could not update conversation message."),
+        );
+    }
+}
+
+
+async function handleTranscriptDelete(response) {
+    try {
+        // Safety order: cancel live approvals first, then Chat
+        // model memory, then the visible transcript. If chat clear
+        // fails, leave the transcript intact so model memory and UI
+        // do not diverge silently.
+        await clearPendingApprovals();
+        await clearChatHistory();
+        await clearTranscript();
+        sendJson(response, 200, { ok: true });
+    } catch (error) {
+        console.error("DELETE /api/transcript failed:", error.message);
+        sendError(
+            response,
+            500,
+            userSafeMessage(error, "Could not clear the conversation."),
         );
     }
 }
@@ -700,6 +808,54 @@ async function handleRequest(request, response) {
             return;
         }
 
+        if (pathname === "/api/transcript") {
+            if (request.method === "GET") {
+                await handleTranscriptGet(response);
+                return;
+            }
+
+            if (request.method === "DELETE") {
+                await handleTranscriptDelete(response);
+                return;
+            }
+
+            sendError(
+                response,
+                405,
+                `Method ${request.method} is not allowed for this route.`,
+            );
+            return;
+        }
+
+        if (pathname === "/api/transcript/messages") {
+            if (!requireMethod(request, response, ["POST"])) {
+                return;
+            }
+
+            await handleTranscriptMessagesPost(request, response);
+            return;
+        }
+
+        {
+            const transcriptPatchMatch = pathname.match(
+                /^\/api\/transcript\/messages\/([^/]+)$/,
+            );
+
+            if (transcriptPatchMatch) {
+                if (!requireMethod(request, response, ["PATCH"])) {
+                    return;
+                }
+
+                const messageId = decodeURIComponent(transcriptPatchMatch[1]);
+                await handleTranscriptMessagePatch(
+                    request,
+                    response,
+                    messageId,
+                );
+                return;
+            }
+        }
+
         if (pathname === "/api/rag") {
             if (!requireMethod(request, response, ["POST"])) {
                 return;
@@ -873,6 +1029,7 @@ async function handleRequest(request, response) {
 
 async function main() {
     const { loaded } = await initializeChat();
+    const transcriptInit = await initializeTranscript();
 
     const server = http.createServer(handleRequest);
 
@@ -882,6 +1039,13 @@ async function main() {
         console.log(
             loaded ? "Chat history loaded." : "No previous conversation found.",
         );
+        if (transcriptInit.migrated) {
+            console.log(
+                `Transcript migrated (${transcriptInit.migratedCount ?? 0} messages).`,
+            );
+        } else {
+            console.log("Conversation transcript ready.");
+        }
     });
 }
 

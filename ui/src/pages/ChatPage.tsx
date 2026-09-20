@@ -10,9 +10,11 @@ import {
     sendAgentMessage,
 } from "../services/agentService";
 import {
-    clearChatHistory,
+    appendTranscriptMessages,
+    clearTranscript,
     createId,
-    loadChatHistory,
+    loadTranscript,
+    patchTranscriptMessage,
     sendChatMessage,
 } from "../services/chatService";
 import type {
@@ -22,82 +24,123 @@ import type {
     PendingApproval,
 } from "../types";
 
-function applyAgentResponse(
-    current: ChatMessage[],
+const SAVE_ERROR = "Conversation could not be saved.";
+
+function buildAssistantFromAgent(
     response: AgentResponse,
-    pendingId?: string,
-): ChatMessage[] {
-    const next = [...current];
-    const toolUses = response.activity ?? [];
-    const previousCount = pendingId
-        ? (next.find((message) => message.approval?.id === pendingId)?.toolUses
-              ?.length ?? 0)
-        : 0;
-    const newUses = toolUses.slice(previousCount);
+    contextMode: ChatContextMode,
+    previousToolCount = 0,
+): ChatMessage {
+    const toolUses = (response.activity ?? []).slice(previousToolCount);
 
     if (response.status === "approval_required" && response.approval) {
-        next.push({
+        return {
             id: createId(),
             role: "assistant",
             content: "",
             createdAt: new Date().toISOString(),
-            toolUses: newUses,
+            contextMode,
+            toolUses,
             approval: response.approval,
             approvalStatus: "pending",
-        });
-        return next;
+        };
     }
 
-    next.push({
+    return {
         id: createId(),
         role: "assistant",
         content: response.answer ?? "",
         createdAt: new Date().toISOString(),
-        toolUses: newUses,
+        contextMode,
+        toolUses,
+    };
+}
+
+function reconcileApprovals(
+    transcript: ChatMessage[],
+    liveApprovals: PendingApproval[],
+): { messages: ChatMessage[]; expiredIds: string[] } {
+    const liveIds = new Set(liveApprovals.map((item) => item.id));
+    const expiredIds: string[] = [];
+
+    const messages = transcript.map((message) => {
+        const approvalId = message.approval?.id;
+
+        if (!approvalId || message.approvalStatus !== "pending") {
+            return message;
+        }
+
+        if (liveIds.has(approvalId)) {
+            return message;
+        }
+
+        expiredIds.push(message.id);
+        return {
+            ...message,
+            approvalStatus: "expired" as const,
+        };
     });
 
-    return next;
+    return { messages, expiredIds };
 }
 
 function kickerForMode(mode: ChatContextMode): string {
     if (mode === "computer") {
-        return "Computer mode is session-only · read tools run immediately · changes need approval";
+        return "Next message uses Computer tools · read tools run immediately · changes need approval";
     }
 
     if (mode === "project") {
-        return "Project answers are session-only and are not written to chat-history.json";
+        return "Next message uses Project RAG · prior turns stay visible in this transcript";
     }
 
     if (mode === "file") {
-        return "File mode searches content indexed from folders you explicitly added · File and Project turns are session-only";
+        return "Next message uses File RAG · prior turns stay visible in this transcript";
     }
 
-    return "Normal chat is saved on the backend · Project, File, and Computer stay off that file";
+    return "Next message uses normal Chat · the full transcript is saved until you clear it";
 }
 
 export function ChatPage() {
-    const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-    const [computerMessages, setComputerMessages] = useState<ChatMessage[]>([]);
+    const [messages, setMessages] = useState<ChatMessage[]>([]);
     const [contextMode, setContextMode] = useState<ChatContextMode>("chat");
     const [busy, setBusy] = useState(false);
     const [approvalBusyId, setApprovalBusyId] = useState<string | null>(null);
     const [loadingHistory, setLoadingHistory] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [historyError, setHistoryError] = useState<string | null>(null);
+    const [saveError, setSaveError] = useState<string | null>(null);
     const logRef = useRef<HTMLDivElement>(null);
-    const computer = contextMode === "computer";
-    const messages = computer ? computerMessages : chatMessages;
 
     useEffect(() => {
         let cancelled = false;
 
         async function load() {
             try {
-                const history = await loadChatHistory();
+                const [transcript, liveApprovals] = await Promise.all([
+                    loadTranscript(),
+                    listApprovals().catch(() => [] as PendingApproval[]),
+                ]);
 
-                if (!cancelled) {
-                    setChatMessages(history);
-                    setHistoryError(null);
+                if (cancelled) {
+                    return;
+                }
+
+                const { messages: reconciled, expiredIds } = reconcileApprovals(
+                    transcript,
+                    liveApprovals,
+                );
+
+                setMessages(reconciled);
+                setHistoryError(null);
+
+                for (const id of expiredIds) {
+                    try {
+                        await patchTranscriptMessage(id, {
+                            approvalStatus: "expired",
+                        });
+                    } catch {
+                        // Display already shows expired; persist best-effort.
+                    }
                 }
             } catch (caught) {
                 if (!cancelled) {
@@ -122,34 +165,6 @@ export function ChatPage() {
     }, []);
 
     useEffect(() => {
-        if (!computer) {
-            return;
-        }
-
-        let cancelled = false;
-
-        async function restoreApprovals() {
-            try {
-                const approvals = await listApprovals();
-
-                if (cancelled || approvals.length === 0) {
-                    return;
-                }
-
-                setComputerMessages((current) => mergeRestoredApprovals(current, approvals));
-            } catch {
-                // Keep the session usable if pending-approval restore fails.
-            }
-        }
-
-        void restoreApprovals();
-
-        return () => {
-            cancelled = true;
-        };
-    }, [computer]);
-
-    useEffect(() => {
         const log = logRef.current;
 
         if (!log) {
@@ -162,7 +177,28 @@ export function ChatPage() {
             top: log.scrollHeight,
             behavior: reduceMotion ? "auto" : "smooth",
         });
-    }, [messages, busy, error, loadingHistory, computer]);
+    }, [messages, busy, error, saveError, loadingHistory]);
+
+    async function persistUserMessage(userMessage: ChatMessage): Promise<void> {
+        try {
+            await appendTranscriptMessages([userMessage]);
+            setSaveError(null);
+        } catch {
+            setSaveError(SAVE_ERROR);
+            throw new Error(SAVE_ERROR);
+        }
+    }
+
+    async function persistAssistantMessage(
+        assistantMessage: ChatMessage,
+    ): Promise<void> {
+        try {
+            await appendTranscriptMessages([assistantMessage]);
+            setSaveError(null);
+        } catch {
+            setSaveError(SAVE_ERROR);
+        }
+    }
 
     async function handleSend(text: string) {
         const userMessage: ChatMessage = {
@@ -170,36 +206,45 @@ export function ChatPage() {
             role: "user",
             content: text,
             createdAt: new Date().toISOString(),
+            contextMode,
         };
-
-        if (computer) {
-            setComputerMessages((current) => [...current, userMessage]);
-        } else {
-            setChatMessages((current) => [...current, userMessage]);
-        }
 
         setBusy(true);
         setError(null);
+        setSaveError(null);
 
         try {
-            if (computer) {
+            await persistUserMessage(userMessage);
+            setMessages((current) => [...current, userMessage]);
+        } catch {
+            setBusy(false);
+            return;
+        }
+
+        try {
+            if (contextMode === "computer") {
                 const response = await sendAgentMessage(text);
-                setComputerMessages((current) => applyAgentResponse(current, response));
+                const assistantMessage = buildAssistantFromAgent(
+                    response,
+                    contextMode,
+                );
+                setMessages((current) => [...current, assistantMessage]);
+                await persistAssistantMessage(assistantMessage);
             } else {
                 const response = await sendChatMessage({
                     message: text,
                     contextMode,
                 });
-
                 const assistantMessage: ChatMessage = {
                     id: createId(),
                     role: "assistant",
                     content: response.answer,
                     createdAt: new Date().toISOString(),
+                    contextMode,
                     sources: response.sources,
                 };
-
-                setChatMessages((current) => [...current, assistantMessage]);
+                setMessages((current) => [...current, assistantMessage]);
+                await persistAssistantMessage(assistantMessage);
             }
         } catch (caught) {
             const message =
@@ -216,15 +261,12 @@ export function ChatPage() {
     async function handleClear() {
         setBusy(true);
         setError(null);
+        setSaveError(null);
 
         try {
-            if (computer) {
-                setComputerMessages([]);
-            } else {
-                await clearChatHistory();
-                setChatMessages([]);
-                setHistoryError(null);
-            }
+            await clearTranscript();
+            setMessages([]);
+            setHistoryError(null);
         } catch (caught) {
             setError(
                 caught instanceof Error
@@ -240,17 +282,29 @@ export function ChatPage() {
         setApprovalBusyId(id);
         setError(null);
 
-        setComputerMessages((current) =>
+        const target = messages.find((message) => message.approval?.id === id);
+        if (!target) {
+            setApprovalBusyId(null);
+            return;
+        }
+
+        const nextStatus = decision === "approve" ? "approved" : "rejected";
+
+        setMessages((current) =>
             current.map((message) =>
                 message.approval?.id === id
-                    ? {
-                          ...message,
-                          approvalStatus:
-                              decision === "approve" ? "approved" : "rejected",
-                      }
+                    ? { ...message, approvalStatus: nextStatus }
                     : message,
             ),
         );
+
+        try {
+            await patchTranscriptMessage(target.id, {
+                approvalStatus: nextStatus,
+            });
+        } catch {
+            setSaveError(SAVE_ERROR);
+        }
 
         try {
             const response =
@@ -258,22 +312,58 @@ export function ChatPage() {
                     ? await approveAction(id)
                     : await rejectAction(id);
 
-            setComputerMessages((current) =>
-                applyAgentResponse(current, response, id),
+            const previousToolCount = target.toolUses?.length ?? 0;
+            const assistantMessage = buildAssistantFromAgent(
+                response,
+                target.contextMode ?? "computer",
+                previousToolCount,
             );
+
+            setMessages((current) => [...current, assistantMessage]);
+            await persistAssistantMessage(assistantMessage);
         } catch (caught) {
-            setComputerMessages((current) =>
-                current.map((message) =>
-                    message.approval?.id === id
-                        ? { ...message, approvalStatus: "pending" }
-                        : message,
-                ),
-            );
-            setError(
+            const message =
                 caught instanceof Error
                     ? caught.message
-                    : "Could not update that approval.",
-            );
+                    : "Could not update that approval.";
+
+            if (message.includes("Unknown or expired")) {
+                setMessages((current) =>
+                    current.map((item) =>
+                        item.approval?.id === id
+                            ? { ...item, approvalStatus: "expired" }
+                            : item,
+                    ),
+                );
+
+                try {
+                    await patchTranscriptMessage(target.id, {
+                        approvalStatus: "expired",
+                    });
+                } catch {
+                    setSaveError(SAVE_ERROR);
+                }
+
+                setError("That approval is no longer available.");
+            } else {
+                setMessages((current) =>
+                    current.map((item) =>
+                        item.approval?.id === id
+                            ? { ...item, approvalStatus: "pending" }
+                            : item,
+                    ),
+                );
+
+                try {
+                    await patchTranscriptMessage(target.id, {
+                        approvalStatus: "pending",
+                    });
+                } catch {
+                    setSaveError(SAVE_ERROR);
+                }
+
+                setError(message);
+            }
         } finally {
             setApprovalBusyId(null);
         }
@@ -281,33 +371,35 @@ export function ChatPage() {
 
     const empty =
         !loadingHistory && messages.length === 0 && !busy && !historyError;
-    const heading = computer ? "Computer" : "Chat";
 
     return (
         <section className="page page-chat" aria-labelledby="chat-heading">
             <div className="page-toolbar">
                 <div>
-                    <h1 id="chat-heading">{heading}</h1>
+                    <h1 id="chat-heading">Chat</h1>
                     <p className="page-kicker">{kickerForMode(contextMode)}</p>
                 </div>
                 <button
                     type="button"
                     className="btn btn-ghost"
                     onClick={() => void handleClear()}
-                    disabled={busy || (messages.length === 0 && !error)}
+                    disabled={
+                        busy ||
+                        (messages.length === 0 && !error && !saveError)
+                    }
                 >
                     Clear conversation
                 </button>
             </div>
 
             <div className="chat-log" ref={logRef} tabIndex={0} aria-label="Conversation">
-                {loadingHistory && !computer ? (
+                {loadingHistory ? (
                     <p className="chat-working" aria-live="polite">
                         Loading conversation…
                     </p>
                 ) : null}
 
-                {historyError && !computer ? (
+                {historyError ? (
                     <div className="banner banner-error" role="alert">
                         <strong>Could not load history</strong>
                         <p>{historyError}</p>
@@ -316,17 +408,9 @@ export function ChatPage() {
 
                 {empty ? (
                     <EmptyState
-                        title={computer ? "Ask your computer to look around" : "Ask your computer"}
-                        body={
-                            computer
-                                ? "Computer mode can list, search, and read files in allowed folders. Creating, copying, moving, or renaming waits for your approval. These turns are not saved to chat-history.json."
-                                : "Normal chat uses the local Node API and Qwen. Project mode searches the indexed codebase. File mode searches content indexed from folders you explicitly added. File and Project turns are session-only."
-                        }
-                        hint={
-                            computer
-                                ? "Read tools run on their own. Choose File for document questions over your File Intelligence index."
-                                : "Choose Chat, Project, File, or Computer next to the composer."
-                        }
+                        title="Ask your computer"
+                        body="One shared transcript keeps Chat, Project, File, and Computer turns in order. The context selector only changes how the next message is processed."
+                        hint="Choose Chat, Project, File, or Computer next to the composer. Clear conversation wipes the transcript, Chat memory, and pending Computer approvals."
                     />
                 ) : (
                     messages.map((message) => (
@@ -334,8 +418,12 @@ export function ChatPage() {
                             key={message.id}
                             message={message}
                             approvalBusy={approvalBusyId === message.approval?.id}
-                            onApprove={(id) => void handleApproval(id, "approve")}
-                            onReject={(id) => void handleApproval(id, "reject")}
+                            onApprove={(approvalId) =>
+                                void handleApproval(approvalId, "approve")
+                            }
+                            onReject={(approvalId) =>
+                                void handleApproval(approvalId, "reject")
+                            }
                         />
                     ))
                 )}
@@ -344,6 +432,13 @@ export function ChatPage() {
                     <p className="chat-working" aria-live="polite">
                         Generating response…
                     </p>
+                ) : null}
+
+                {saveError ? (
+                    <div className="banner banner-error" role="alert">
+                        <strong>Conversation could not be saved.</strong>
+                        <p>{saveError}</p>
+                    </div>
                 ) : null}
 
                 {error ? (
@@ -357,38 +452,9 @@ export function ChatPage() {
             <ChatComposer
                 contextMode={contextMode}
                 onContextModeChange={setContextMode}
-                busy={busy || (!computer && loadingHistory) || approvalBusyId !== null}
+                busy={busy || loadingHistory || approvalBusyId !== null}
                 onSend={handleSend}
             />
         </section>
     );
-}
-
-function mergeRestoredApprovals(
-    current: ChatMessage[],
-    approvals: PendingApproval[],
-): ChatMessage[] {
-    const existing = new Set(
-        current
-            .map((message) => message.approval?.id)
-            .filter((id): id is string => Boolean(id)),
-    );
-    const extras: ChatMessage[] = [];
-
-    for (const approval of approvals) {
-        if (existing.has(approval.id)) {
-            continue;
-        }
-
-        extras.push({
-            id: `approval-${approval.id}`,
-            role: "assistant",
-            content: "",
-            createdAt: new Date().toISOString(),
-            approval,
-            approvalStatus: "pending",
-        });
-    }
-
-    return extras.length > 0 ? [...current, ...extras] : current;
 }

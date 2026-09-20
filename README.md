@@ -24,7 +24,8 @@ interfaces
 └── server.js       local HTTP API (127.0.0.1:3001)
 
 shared logic
-├── lib/chat.js     normal chat + chat-history.json
+├── lib/chat.js     normal chat + chat-history.json (model context)
+├── lib/conversation-transcript.js  UI transcript (display only)
 ├── lib/rag.js      project retrieval
 ├── lib/agent.js    Computer-mode tools + approvals
 ├── lib/activity.js tool audit log
@@ -40,7 +41,8 @@ React UI  →  Vite /api proxy  →  server.js  →  lib/chat.js, lib/rag.js, or
 
 The browser never calls `localhost:11434`.
 
-* `lib/chat.js` — persistent normal conversation
+* `lib/chat.js` — Chat-mode model conversation (`chat-history.json`)
+* `lib/conversation-transcript.js` — unified UI transcript (`data/conversation-transcript.json`)
 * `lib/rag.js` — scan, chunk, index, search, and ask about the project
 * `lib/agent.js` — Computer-mode tool loop and pending approvals
 * `lib/tools/` — root-scoped filesystem tools and path checks
@@ -51,11 +53,11 @@ The browser never calls `localhost:11434`.
 * `project-rag.js` — standalone RAG CLI (same engine as `/rag`)
 * `ui/` — React interface
 
-Normal chat persists to `chat-history.json`. Project/RAG questions and Computer-mode turns do not.
+The Chat page shows one chronological transcript for Chat, Project, File, and Computer. That display transcript is separate from model context: only Chat mode writes to `chat-history.json`. Project/File/Computer turns are never merged into normal Chat history, and the unified transcript is never sent to every model.
 
-File context in the UI is still future work. The terminal `/load` command continues to work and is not exposed over HTTP.
+File context in the UI uses File Intelligence indexes. The terminal `/load` command continues to work and is not exposed over HTTP.
 
-Use **either** the terminal **or** the HTTP server as the active normal-chat interface — not both at the same time. Each process keeps its own in-memory copy of the conversation while writing the same history file. The React UI uses `server.js`. Pending Computer-mode approvals live only in that `server.js` process and disappear on restart.
+Use **either** the terminal **or** the HTTP server as the active normal-chat interface — not both at the same time. Each process keeps its own in-memory copy of the Chat model conversation while writing the same history file. The React UI uses `server.js`. Pending Computer-mode approvals live only in that `server.js` process and disappear on restart.
 
 ```powershell
 node app.js
@@ -107,10 +109,12 @@ npm run dev
 
 Then open `http://localhost:5173`.
 
-* **Chat** context uses `POST /api/chat` and persists to `chat-history.json`
-* **Project** context uses `POST /api/rag` and does not persist those turns
-* **Computer** context uses `POST /api/agent` for filesystem tools. Those turns are session-only
-* **File** context remains disabled
+* **Chat** context uses `POST /api/chat` and persists model history to `chat-history.json`
+* **Project** context uses `POST /api/rag` (Project RAG only; not written to Chat model history)
+* **File** context uses `POST /api/files/ask` (File RAG only; not written to Chat model history)
+* **Computer** context uses `POST /api/agent` for filesystem tools (agent flow only)
+* All four modes append display-safe turns to the unified transcript (`GET/POST/PATCH/DELETE /api/transcript`)
+* The context selector changes only how the **next** message is processed; prior turns stay visible
 * The header is green / “Local AI connected” only when Ollama is reachable and both required models are installed
 
 You can also start the terminal chatbot with `npm run chat` (same as `node app.js`). Do not run that at the same time as `npm run server` if you care about a single in-memory conversation.
@@ -170,7 +174,7 @@ Useful commands inside the chat:
 
 | Mode | What it does |
 |---|---|
-| Normal chat | Uses persistent conversation history in `chat-history.json` |
+| Normal chat | Uses persistent model history in `chat-history.json`; UI also stores display turns in the unified transcript |
 | `/load` | Gives the model the **entire** explicitly selected file (transient; not saved to history) |
 | `/rag` | Searches the project index, retrieves relevant chunks, and answers from those chunks only |
 
@@ -182,9 +186,11 @@ Useful commands inside the chat:
 
 ### History behavior
 
-* Normal chat messages are saved to `chat-history.json`
-* Loaded file contents are **not** written into history
-* `/rag` questions, answers, and retrieved chunks are **not** written into history
+* Normal chat model messages are saved to `chat-history.json`
+* The Chat page UI transcript is saved to `data/conversation-transcript.json` (all modes)
+* Loaded file contents are **not** written into either store
+* `/rag` retrieved chunks are **not** written into Chat model history or the UI transcript
+* Clear conversation cancels pending Computer approvals, resets Chat model history, and empties the transcript
 
 ---
 
@@ -251,7 +257,7 @@ node project-rag.js chat
 
 Ask multiple questions about the project. Type `exit` to quit.
 
-This mode does not write retrieved source code into `chat-history.json`.
+This mode does not write retrieved source code into `chat-history.json` or the UI transcript.
 
 ### Example chatbot RAG usage
 
@@ -330,7 +336,7 @@ That keeps answers more grounded in the real project files and avoids stuffing t
 
 ## Notes
 
-* `.local-ai-index.json`, `chat-history.json`, and `data/tool-activity.jsonl` are ignored by git.
+* `.local-ai-index.json`, `chat-history.json`, `data/conversation-transcript.json`, and `data/tool-activity.jsonl` are ignored by git.
 * Sensitive files named `.env` or `.env.*` are never indexed.
 * Retrieved project text is treated as data, not instructions.
 * Lock files and common generated folders are skipped during scanning.

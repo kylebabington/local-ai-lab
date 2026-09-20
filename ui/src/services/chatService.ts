@@ -12,6 +12,9 @@ import type {
     ChatSource,
     FileRagSource,
     RagSource,
+    ToolActionStatus,
+    PendingApproval,
+    ToolUseLine,
 } from "../types";
 import { apiRequest } from "./http";
 
@@ -52,9 +55,129 @@ export function historyToMessages(
             role: item.role as "user" | "assistant",
             content: item.content,
             createdAt: item.createdAt,
+            contextMode: "chat",
         }));
 }
 
+type TranscriptMessagePayload = {
+    id: string;
+    role: string;
+    content: string;
+    createdAt: string | null;
+    contextMode?: ChatMessage["contextMode"];
+    sources?: ChatSource[];
+    toolUses?: ToolUseLine[];
+    approval?: PendingApproval | null;
+    approvalStatus?: ToolActionStatus;
+};
+
+function transcriptToMessages(items: TranscriptMessagePayload[]): ChatMessage[] {
+    return items
+        .filter((item) => item.role === "user" || item.role === "assistant")
+        .map((item) => ({
+            id: item.id,
+            role: item.role as "user" | "assistant",
+            content: item.content,
+            createdAt: item.createdAt,
+            contextMode: item.contextMode,
+            sources: item.sources,
+            toolUses: item.toolUses,
+            approval: item.approval,
+            approvalStatus: item.approvalStatus,
+        }));
+}
+
+function toTranscriptPayload(message: ChatMessage): TranscriptMessagePayload {
+    if (!message.contextMode) {
+        throw new Error("Transcript messages require contextMode.");
+    }
+
+    const payload: TranscriptMessagePayload = {
+        id: message.id,
+        role: message.role,
+        content: message.content,
+        createdAt: message.createdAt,
+        contextMode: message.contextMode,
+    };
+
+    if (message.sources !== undefined) {
+        payload.sources = message.sources;
+    }
+
+    if (message.toolUses !== undefined) {
+        payload.toolUses = message.toolUses;
+    }
+
+    if (message.approval !== undefined) {
+        payload.approval = message.approval;
+    }
+
+    if (message.approvalStatus !== undefined) {
+        payload.approvalStatus = message.approvalStatus;
+    }
+
+    return payload;
+}
+
+export async function loadTranscript(): Promise<ChatMessage[]> {
+    const data = await apiRequest<{ messages: TranscriptMessagePayload[] }>(
+        "/api/transcript",
+    );
+
+    return transcriptToMessages(data.messages ?? []);
+}
+
+export async function appendTranscriptMessages(
+    messages: ChatMessage[],
+): Promise<ChatMessage[]> {
+    const data = await apiRequest<{
+        ok: boolean;
+        appended: number;
+        messages: TranscriptMessagePayload[];
+    }>("/api/transcript/messages", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            messages: messages.map(toTranscriptPayload),
+        }),
+    });
+
+    return transcriptToMessages(data.messages ?? []);
+}
+
+export async function patchTranscriptMessage(
+    id: string,
+    patch: {
+        content?: string;
+        sources?: ChatSource[];
+        toolUses?: ToolUseLine[];
+        approval?: PendingApproval | null;
+        approvalStatus?: ToolActionStatus;
+    },
+): Promise<ChatMessage> {
+    const data = await apiRequest<{
+        ok: boolean;
+        message: TranscriptMessagePayload;
+    }>(`/api/transcript/messages/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify(patch),
+    });
+
+    return transcriptToMessages([data.message])[0];
+}
+
+export async function clearTranscript(): Promise<void> {
+    await apiRequest<{ ok: boolean }>("/api/transcript", {
+        method: "DELETE",
+    });
+}
+
+/** @deprecated Prefer loadTranscript for the unified Chat page. */
 export async function loadChatHistory(): Promise<ChatMessage[]> {
     const data = await apiRequest<{
         messages: Array<{
@@ -67,6 +190,7 @@ export async function loadChatHistory(): Promise<ChatMessage[]> {
     return historyToMessages(data.messages ?? []);
 }
 
+/** @deprecated Prefer clearTranscript for the unified Chat page. */
 export async function clearChatHistory(): Promise<void> {
     await apiRequest<{ ok: boolean }>("/api/chat/history", {
         method: "DELETE",
@@ -135,4 +259,4 @@ export async function sendChatMessage(
     };
 }
 
-export { createId, isFileRagSource };
+export { createId, isFileRagSource, transcriptToMessages };

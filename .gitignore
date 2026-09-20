@@ -6,9 +6,11 @@ data/tool-activity.jsonl
 data/file-roots.json
 data/file-inventory.json
 data/file-content-index.json
+data/conversation-transcript.json
 .tool-test-sandbox/
 .file-test-sandbox/
 .file-content-test-sandbox/
+.transcript-test-sandbox/
 
 # Frontend (Vite)
 ui/node_modules/

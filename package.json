@@ -8,6 +8,7 @@
     "chat": "node app.js",
     "server": "node server.js",
     "rag:index": "node project-rag.js index",
+    "verify:transcript": "node scripts/verify-conversation-transcript.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

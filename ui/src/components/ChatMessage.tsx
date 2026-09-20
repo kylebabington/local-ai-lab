@@ -21,6 +21,26 @@ function roleLabel(role: ChatMessage["role"]): string {
     return "Assistant";
 }
 
+function modeLabel(mode: ChatMessage["contextMode"]): string | null {
+    if (!mode) {
+        return null;
+    }
+
+    if (mode === "chat") {
+        return "Chat";
+    }
+
+    if (mode === "project") {
+        return "Project";
+    }
+
+    if (mode === "file") {
+        return "File";
+    }
+
+    return "Computer";
+}
+
 function approvalToAction(
     approval: PendingApproval,
     status: ChatMessage["approvalStatus"],
@@ -46,7 +66,10 @@ function approvalToAction(
     return {
         id: approval.id,
         title: approval.tool,
-        summary: "This action will not run until you approve it.",
+        summary:
+            status === "expired"
+                ? "This approval is no longer available."
+                : "This action will not run until you approve it.",
         details,
         status: status ?? "pending",
         permission: approval.permission,
@@ -113,6 +136,11 @@ export function ChatMessageItem({
         >
             <header className="chat-message-meta">
                 <span className="chat-message-role">{roleLabel(message.role)}</span>
+                {modeLabel(message.contextMode) ? (
+                    <span className="chat-message-badge">
+                        {modeLabel(message.contextMode)}
+                    </span>
+                ) : null}
                 {hasTime ? (
                     <time
                         className="chat-message-time"

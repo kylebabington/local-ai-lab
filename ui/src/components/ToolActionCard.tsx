@@ -19,6 +19,10 @@ function statusLabel(status: ToolActionStatus, busy: boolean): string {
         return "Rejected";
     }
 
+    if (status === "expired") {
+        return "Expired";
+    }
+
     return "Awaiting decision";
 }
 
