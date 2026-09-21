@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { EmptyState } from "../components/EmptyState";
+import { forgetAllConversations } from "../services/chatService";
 import {
     fetchMemoryStatus,
     rebuildMemoryIndex,
@@ -26,6 +27,7 @@ export function MemoryPage() {
     const [status, setStatus] = useState<ConversationMemoryStatus | null>(null);
     const [loading, setLoading] = useState(true);
     const [rebuilding, setRebuilding] = useState(false);
+    const [forgetting, setForgetting] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
     const refresh = useCallback(async () => {
@@ -69,23 +71,62 @@ export function MemoryPage() {
         }
     }
 
+    async function handleForgetAll() {
+        const confirmed = window.confirm(
+            "Forget all conversation history?\n\nThis permanently deletes the current transcript, all archived conversations, Chat model history, and Conversation Memory. This cannot be undone.",
+        );
+
+        if (!confirmed) {
+            return;
+        }
+
+        setForgetting(true);
+        setError(null);
+
+        try {
+            await forgetAllConversations();
+            await refresh();
+        } catch (caught) {
+            setError(
+                caught instanceof Error
+                    ? caught.message
+                    : "Could not forget conversation history.",
+            );
+        } finally {
+            setForgetting(false);
+        }
+    }
+
+    const totalConversations = status?.totalConversations ?? null;
+    const archivedConversations = status?.archivedConversations ?? null;
+
     return (
         <section className="page" aria-labelledby="memory-heading">
             <header className="page-toolbar">
                 <div>
                     <h1 id="memory-heading">Memory</h1>
                     <p className="page-kicker">
-                        Long-term semantic recall over your conversation transcript
+                        Long-term semantic recall over current and archived conversations
                     </p>
                 </div>
-                <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={() => void handleRebuild()}
-                    disabled={rebuilding || loading}
-                >
-                    {rebuilding ? "Rebuilding…" : "Rebuild memory"}
-                </button>
+                <div className="toolbar-actions">
+                    <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => void handleForgetAll()}
+                        disabled={forgetting || rebuilding || loading}
+                    >
+                        {forgetting ? "Forgetting…" : "Forget all conversation history"}
+                    </button>
+                    <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => void handleRebuild()}
+                        disabled={rebuilding || forgetting || loading}
+                    >
+                        {rebuilding ? "Rebuilding…" : "Rebuild memory"}
+                    </button>
+                </div>
             </header>
 
             <div className="page-stack">
@@ -109,8 +150,23 @@ export function MemoryPage() {
                     <p className="chat-working">Loading conversation memory…</p>
                 ) : status ? (
                     <article className="info-card">
-                        <h2>Conversation memory</h2>
+                        <h2>Conversation Memory</h2>
                         <dl className="status-grid">
+                            <div>
+                                <dt>Conversations</dt>
+                                <dd>{totalConversations ?? "—"}</dd>
+                            </div>
+                            <div>
+                                <dt>Archived</dt>
+                                <dd>{archivedConversations ?? "—"}</dd>
+                            </div>
+                            <div>
+                                <dt>Current messages</dt>
+                                <dd>
+                                    {status.currentMessages ??
+                                        status.transcriptMessages}
+                                </dd>
+                            </div>
                             <div>
                                 <dt>Indexed turns</dt>
                                 <dd>{status.memoryUnits}</dd>
@@ -118,10 +174,6 @@ export function MemoryPage() {
                             <div>
                                 <dt>Chunks</dt>
                                 <dd>{status.chunks}</dd>
-                            </div>
-                            <div>
-                                <dt>Transcript messages</dt>
-                                <dd>{status.transcriptMessages}</dd>
                             </div>
                             <div>
                                 <dt>Last updated</dt>
@@ -133,7 +185,9 @@ export function MemoryPage() {
                             </div>
                             <div>
                                 <dt>State</dt>
-                                <dd>{status.stale ? "Behind transcript" : "Up to date"}</dd>
+                                <dd>
+                                    {status.stale ? "Behind transcript" : "Up to date"}
+                                </dd>
                             </div>
                         </dl>
                     </article>
@@ -141,7 +195,7 @@ export function MemoryPage() {
                     <EmptyState
                         title="Conversation memory is not ready"
                         body="The derived memory index will appear after the first successful sync."
-                        hint="Your transcript remains the source of truth even when memory is empty."
+                        hint="Your transcript and archive remain the source of truth even when memory is empty."
                     />
                 )}
 
@@ -149,19 +203,24 @@ export function MemoryPage() {
                     <h2>How it works</h2>
                     <ul className="plain-list">
                         <li>
-                            The transcript is the only permanent copy of what you said.
+                            Current and archived conversations are the permanent copy of
+                            what you said.
                         </li>
                         <li>
                             Conversation Memory is a disposable search index over that
-                            transcript.
+                            history.
                         </li>
                         <li>
                             Normal Chat can retrieve a few relevant past turns without
                             loading the whole history.
                         </li>
                         <li>
-                            Clear conversation forgets the transcript, Chat history, and
-                            memory index together.
+                            New conversation archives the current thread and starts
+                            fresh. Long-term memory stays searchable.
+                        </li>
+                        <li>
+                            Forget all conversation history is the only action that
+                            permanently erases archived and current history.
                         </li>
                     </ul>
                 </article>

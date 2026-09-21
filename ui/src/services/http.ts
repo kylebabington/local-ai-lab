@@ -9,6 +9,23 @@ interface ApiErrorBody {
     };
 }
 
+export class ApiError extends Error {
+    status: number;
+
+    constructor(message: string, status: number) {
+        super(message);
+        this.name = "ApiError";
+        this.status = status;
+    }
+}
+
+export function isConversationChangedError(error: unknown): boolean {
+    return (
+        error instanceof ApiError &&
+        error.status === 409
+    );
+}
+
 export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
     let response: Response;
 
@@ -26,7 +43,7 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
         data = await response.json();
     } catch {
         if (!response.ok) {
-            throw new Error(`Request failed (${response.status}).`);
+            throw new ApiError(`Request failed (${response.status}).`, response.status);
         }
 
         throw new Error("The local API returned an invalid response.");
@@ -34,8 +51,9 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
 
     if (!response.ok) {
         const body = data as ApiErrorBody;
-        throw new Error(
+        throw new ApiError(
             body.error?.message ?? `Request failed (${response.status}).`,
+            response.status,
         );
     }
 

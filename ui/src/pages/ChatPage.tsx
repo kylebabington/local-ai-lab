@@ -11,12 +11,13 @@ import {
 } from "../services/agentService";
 import {
     appendTranscriptMessages,
-    clearTranscript,
     createId,
     loadTranscript,
     patchTranscriptMessage,
     sendChatMessage,
+    startNewConversation,
 } from "../services/chatService";
+import { isConversationChangedError } from "../services/http";
 import type {
     AgentResponse,
     ChatContextMode,
@@ -97,19 +98,26 @@ function kickerForMode(mode: ChatContextMode): string {
         return "Next message uses File RAG · prior turns stay visible in this transcript";
     }
 
-    return "Next message uses normal Chat · the full transcript is saved until you clear it";
+    return "Next message uses normal Chat · long-term memory survives New conversation";
 }
 
 export function ChatPage() {
     const [messages, setMessages] = useState<ChatMessage[]>([]);
+    const [conversationId, setConversationId] = useState<string | null>(null);
     const [contextMode, setContextMode] = useState<ChatContextMode>("chat");
     const [busy, setBusy] = useState(false);
+    const [persisting, setPersisting] = useState(false);
     const [approvalBusyId, setApprovalBusyId] = useState<string | null>(null);
     const [loadingHistory, setLoadingHistory] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [historyError, setHistoryError] = useState<string | null>(null);
     const [saveError, setSaveError] = useState<string | null>(null);
     const logRef = useRef<HTMLDivElement>(null);
+    const conversationIdRef = useRef<string | null>(null);
+
+    useEffect(() => {
+        conversationIdRef.current = conversationId;
+    }, [conversationId]);
 
     useEffect(() => {
         let cancelled = false;
@@ -126,18 +134,24 @@ export function ChatPage() {
                 }
 
                 const { messages: reconciled, expiredIds } = reconcileApprovals(
-                    transcript,
+                    transcript.messages,
                     liveApprovals,
                 );
 
+                setConversationId(transcript.conversationId);
+                conversationIdRef.current = transcript.conversationId;
                 setMessages(reconciled);
                 setHistoryError(null);
 
                 for (const id of expiredIds) {
                     try {
-                        await patchTranscriptMessage(id, {
-                            approvalStatus: "expired",
-                        });
+                        await patchTranscriptMessage(
+                            transcript.conversationId,
+                            id,
+                            {
+                                approvalStatus: "expired",
+                            },
+                        );
                     } catch {
                         // Display already shows expired; persist best-effort.
                     }
@@ -179,28 +193,55 @@ export function ChatPage() {
         });
     }, [messages, busy, error, saveError, loadingHistory]);
 
-    async function persistUserMessage(userMessage: ChatMessage): Promise<void> {
+    async function persistUserMessage(
+        turnConversationId: string,
+        userMessage: ChatMessage,
+    ): Promise<void> {
+        setPersisting(true);
         try {
-            await appendTranscriptMessages([userMessage]);
+            await appendTranscriptMessages(turnConversationId, [userMessage]);
             setSaveError(null);
-        } catch {
+        } catch (caught) {
+            if (isConversationChangedError(caught)) {
+                throw caught;
+            }
             setSaveError(SAVE_ERROR);
             throw new Error(SAVE_ERROR);
+        } finally {
+            setPersisting(false);
         }
     }
 
     async function persistAssistantMessage(
+        turnConversationId: string,
         assistantMessage: ChatMessage,
-    ): Promise<void> {
+    ): Promise<boolean> {
+        setPersisting(true);
         try {
-            await appendTranscriptMessages([assistantMessage]);
+            await appendTranscriptMessages(turnConversationId, [
+                assistantMessage,
+            ]);
             setSaveError(null);
-        } catch {
+            return true;
+        } catch (caught) {
+            if (isConversationChangedError(caught)) {
+                // User started a new conversation; abandon late response.
+                return false;
+            }
             setSaveError(SAVE_ERROR);
+            return false;
+        } finally {
+            setPersisting(false);
         }
     }
 
     async function handleSend(text: string) {
+        const turnConversationId = conversationIdRef.current;
+        if (!turnConversationId) {
+            setError("Conversation is not ready yet.");
+            return;
+        }
+
         const userMessage: ChatMessage = {
             id: createId(),
             role: "user",
@@ -214,9 +255,14 @@ export function ChatPage() {
         setSaveError(null);
 
         try {
-            await persistUserMessage(userMessage);
+            await persistUserMessage(turnConversationId, userMessage);
             setMessages((current) => [...current, userMessage]);
-        } catch {
+        } catch (caught) {
+            if (isConversationChangedError(caught)) {
+                setError(
+                    "Conversation changed. Your message was not saved to the new conversation.",
+                );
+            }
             setBusy(false);
             return;
         }
@@ -228,8 +274,13 @@ export function ChatPage() {
                     response,
                     contextMode,
                 );
-                setMessages((current) => [...current, assistantMessage]);
-                await persistAssistantMessage(assistantMessage);
+                const saved = await persistAssistantMessage(
+                    turnConversationId,
+                    assistantMessage,
+                );
+                if (saved && conversationIdRef.current === turnConversationId) {
+                    setMessages((current) => [...current, assistantMessage]);
+                }
             } else {
                 const response = await sendChatMessage({
                     message: text,
@@ -244,8 +295,13 @@ export function ChatPage() {
                     contextMode,
                     sources: response.sources,
                 };
-                setMessages((current) => [...current, assistantMessage]);
-                await persistAssistantMessage(assistantMessage);
+                const saved = await persistAssistantMessage(
+                    turnConversationId,
+                    assistantMessage,
+                );
+                if (saved && conversationIdRef.current === turnConversationId) {
+                    setMessages((current) => [...current, assistantMessage]);
+                }
             }
         } catch (caught) {
             const message =
@@ -259,20 +315,22 @@ export function ChatPage() {
         }
     }
 
-    async function handleClear() {
+    async function handleNewConversation() {
         setBusy(true);
         setError(null);
         setSaveError(null);
 
         try {
-            await clearTranscript();
+            const next = await startNewConversation();
+            setConversationId(next.conversationId);
+            conversationIdRef.current = next.conversationId;
             setMessages([]);
             setHistoryError(null);
         } catch (caught) {
             setError(
                 caught instanceof Error
                     ? caught.message
-                    : "Could not clear the conversation.",
+                    : "Could not start a new conversation.",
             );
         } finally {
             setBusy(false);
@@ -283,8 +341,9 @@ export function ChatPage() {
         setApprovalBusyId(id);
         setError(null);
 
+        const turnConversationId = conversationIdRef.current;
         const target = messages.find((message) => message.approval?.id === id);
-        if (!target) {
+        if (!target || !turnConversationId) {
             setApprovalBusyId(null);
             return;
         }
@@ -300,11 +359,13 @@ export function ChatPage() {
         );
 
         try {
-            await patchTranscriptMessage(target.id, {
+            await patchTranscriptMessage(turnConversationId, target.id, {
                 approvalStatus: nextStatus,
             });
-        } catch {
-            setSaveError(SAVE_ERROR);
+        } catch (caught) {
+            if (!isConversationChangedError(caught)) {
+                setSaveError(SAVE_ERROR);
+            }
         }
 
         try {
@@ -320,8 +381,13 @@ export function ChatPage() {
                 previousToolCount,
             );
 
-            setMessages((current) => [...current, assistantMessage]);
-            await persistAssistantMessage(assistantMessage);
+            const saved = await persistAssistantMessage(
+                turnConversationId,
+                assistantMessage,
+            );
+            if (saved && conversationIdRef.current === turnConversationId) {
+                setMessages((current) => [...current, assistantMessage]);
+            }
         } catch (caught) {
             const message =
                 caught instanceof Error
@@ -338,7 +404,7 @@ export function ChatPage() {
                 );
 
                 try {
-                    await patchTranscriptMessage(target.id, {
+                    await patchTranscriptMessage(turnConversationId, target.id, {
                         approvalStatus: "expired",
                     });
                 } catch {
@@ -356,7 +422,7 @@ export function ChatPage() {
                 );
 
                 try {
-                    await patchTranscriptMessage(target.id, {
+                    await patchTranscriptMessage(turnConversationId, target.id, {
                         approvalStatus: "pending",
                     });
                 } catch {
@@ -383,13 +449,16 @@ export function ChatPage() {
                 <button
                     type="button"
                     className="btn btn-ghost"
-                    onClick={() => void handleClear()}
+                    onClick={() => void handleNewConversation()}
                     disabled={
                         busy ||
+                        persisting ||
+                        loadingHistory ||
+                        !conversationId ||
                         (messages.length === 0 && !error && !saveError)
                     }
                 >
-                    Clear conversation
+                    New conversation
                 </button>
             </div>
 
@@ -411,7 +480,7 @@ export function ChatPage() {
                     <EmptyState
                         title="Ask your computer"
                         body="One shared transcript keeps Chat, Project, File, and Computer turns in order. The context selector only changes how the next message is processed."
-                        hint="Choose Chat, Project, File, or Computer next to the composer. Clear conversation wipes the transcript, Chat memory, Conversation Memory, and pending Computer approvals."
+                        hint="Choose Chat, Project, File, or Computer next to the composer. New conversation archives the current thread and starts fresh — long-term Conversation Memory is preserved."
                     />
                 ) : (
                     messages.map((message) => (

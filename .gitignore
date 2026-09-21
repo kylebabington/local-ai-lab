@@ -7,12 +7,15 @@ data/file-roots.json
 data/file-inventory.json
 data/file-content-index.json
 data/conversation-transcript.json
+data/conversation-archive/
 data/conversation-memory-index.json
 .tool-test-sandbox/
 .file-test-sandbox/
 .file-content-test-sandbox/
 .transcript-test-sandbox/
 .conversation-memory-test-sandbox/
+.conversation-archive-test-sandbox/
+.conversation-lifecycle-test-sandbox/
 
 # Frontend (Vite)
 ui/node_modules/

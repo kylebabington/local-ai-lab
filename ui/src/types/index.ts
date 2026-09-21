@@ -270,6 +270,10 @@ export interface ConversationMemoryStatus {
     indexExists: boolean;
     indexedAt: string | null;
     transcriptMessages: number;
+    currentConversationId?: string | null;
+    currentMessages?: number;
+    archivedConversations?: number;
+    totalConversations?: number;
     memoryUnits: number;
     chunks: number;
     stale: boolean;

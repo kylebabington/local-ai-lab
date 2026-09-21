@@ -145,20 +145,32 @@ function toTranscriptPayload(message: ChatMessage): TranscriptMessagePayload {
     return payload;
 }
 
-export async function loadTranscript(): Promise<ChatMessage[]> {
-    const data = await apiRequest<{ messages: TranscriptMessagePayload[] }>(
-        "/api/transcript",
-    );
+export async function loadTranscript(): Promise<{
+    conversationId: string;
+    createdAt: string | null;
+    messages: ChatMessage[];
+}> {
+    const data = await apiRequest<{
+        conversationId: string;
+        createdAt: string | null;
+        messages: TranscriptMessagePayload[];
+    }>("/api/transcript");
 
-    return transcriptToMessages(data.messages ?? []);
+    return {
+        conversationId: data.conversationId,
+        createdAt: data.createdAt ?? null,
+        messages: transcriptToMessages(data.messages ?? []),
+    };
 }
 
 export async function appendTranscriptMessages(
+    conversationId: string,
     messages: ChatMessage[],
 ): Promise<ChatMessage[]> {
     const data = await apiRequest<{
         ok: boolean;
         appended: number;
+        conversationId: string;
         messages: TranscriptMessagePayload[];
     }>("/api/transcript/messages", {
         method: "POST",
@@ -166,6 +178,7 @@ export async function appendTranscriptMessages(
             "Content-Type": "application/json",
         },
         body: JSON.stringify({
+            conversationId,
             messages: messages.map(toTranscriptPayload),
         }),
     });
@@ -174,6 +187,7 @@ export async function appendTranscriptMessages(
 }
 
 export async function patchTranscriptMessage(
+    conversationId: string,
     id: string,
     patch: {
         content?: string;
@@ -191,14 +205,46 @@ export async function patchTranscriptMessage(
         headers: {
             "Content-Type": "application/json",
         },
-        body: JSON.stringify(patch),
+        body: JSON.stringify({
+            conversationId,
+            ...patch,
+        }),
     });
 
     return transcriptToMessages([data.message])[0];
 }
 
-export async function clearTranscript(): Promise<void> {
-    await apiRequest<{ ok: boolean }>("/api/transcript", {
+export async function startNewConversation(): Promise<{
+    conversationId: string;
+    createdAt: string | null;
+}> {
+    const data = await apiRequest<{
+        ok: boolean;
+        conversation: {
+            conversationId: string;
+            createdAt: string | null;
+            messages: TranscriptMessagePayload[];
+        };
+    }>("/api/conversations/new", {
+        method: "POST",
+    });
+
+    return {
+        conversationId: data.conversation.conversationId,
+        createdAt: data.conversation.createdAt ?? null,
+    };
+}
+
+/** @deprecated Delegates to New conversation on the server. */
+export async function clearTranscript(): Promise<{
+    conversationId: string;
+    createdAt: string | null;
+}> {
+    return startNewConversation();
+}
+
+export async function forgetAllConversations(): Promise<void> {
+    await apiRequest<{ ok: boolean }>("/api/conversations", {
         method: "DELETE",
     });
 }

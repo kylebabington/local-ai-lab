@@ -39,7 +39,6 @@ import { askProject } from "./lib/rag.js";
 
 import {
     approveById,
-    clearPendingApprovals,
     listPendingApprovals,
     rejectById,
     runAgent,
@@ -47,7 +46,6 @@ import {
 
 import {
     appendMessages,
-    clearTranscript,
     getTranscript,
     initializeTranscript,
     patchMessage,
@@ -55,13 +53,20 @@ import {
 
 import {
     buildConversationMemoryIndex,
-    clearConversationMemory,
     getConversationMemoryStatus,
     initializeConversationMemory,
     retrieveMemoryForChat,
     scheduleConversationMemorySync,
     searchConversationMemory,
 } from "./lib/conversation-memory.js";
+
+import {
+    forgetAllConversations,
+    forgetConversation,
+    initializeConversationLifecycle,
+    listConversations,
+    startNewConversation,
+} from "./lib/conversation-lifecycle.js";
 
 import { readActivity } from "./lib/activity.js";
 import {
@@ -352,7 +357,12 @@ async function handleChatHistoryDelete(response) {
 async function handleTranscriptGet(response) {
     try {
         const result = await getTranscript();
-        sendJson(response, 200, { messages: result.messages });
+        sendJson(response, 200, {
+            version: result.version,
+            conversationId: result.conversationId,
+            createdAt: result.createdAt,
+            messages: result.messages,
+        });
     } catch (error) {
         console.error("GET /api/transcript failed:", error.message);
         sendError(
@@ -375,10 +385,11 @@ async function handleTranscriptMessagesPost(request, response) {
     }
 
     try {
-        const result = await appendMessages(body.messages);
+        const result = await appendMessages(body.conversationId, body.messages);
         sendJson(response, 200, {
             ok: true,
             appended: result.appended,
+            conversationId: result.conversationId,
             messages: result.messages,
         });
         if (result.appended > 0) {
@@ -406,15 +417,14 @@ async function handleTranscriptMessagePatch(request, response, id) {
     }
 
     try {
-        const result = await patchMessage(id, body);
+        const result = await patchMessage(body.conversationId, id, body);
         sendJson(response, 200, {
             ok: true,
+            conversationId: result.conversationId,
             message: result.message,
             messages: result.messages,
         });
 
-        // Content edits need re-index; approval-only patches do not
-        // change the memory-relevant fingerprint.
         if (typeof body.content === "string") {
             scheduleConversationMemorySync();
         }
@@ -434,21 +444,78 @@ async function handleTranscriptMessagePatch(request, response, id) {
 
 async function handleTranscriptDelete(response) {
     try {
-        // Safety order: cancel live approvals first, then Chat
-        // model memory, then the visible transcript, then derived
-        // Conversation Memory. If chat clear fails, leave the
-        // transcript intact so model memory and UI do not diverge.
-        await clearPendingApprovals();
-        await clearChatHistory();
-        await clearTranscript();
-        await clearConversationMemory();
-        sendJson(response, 200, { ok: true });
+        // Backward compatible: Clear delegates to non-destructive New.
+        const result = await startNewConversation();
+        sendJson(response, 200, { ok: true, ...result });
     } catch (error) {
         console.error("DELETE /api/transcript failed:", error.message);
         sendError(
             response,
-            500,
-            userSafeMessage(error, "Could not clear the conversation."),
+            clientErrorStatus(error, errorStatus(error)),
+            userSafeMessage(error, "Could not start a new conversation."),
+        );
+    }
+}
+
+
+async function handleConversationsNewPost(response) {
+    try {
+        const result = await startNewConversation();
+        sendJson(response, 200, result);
+    } catch (error) {
+        console.error("POST /api/conversations/new failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, errorStatus(error)),
+            userSafeMessage(error, "Could not start a new conversation."),
+        );
+    }
+}
+
+
+async function handleConversationsGet(response) {
+    try {
+        const result = await listConversations();
+        sendJson(response, 200, result);
+    } catch (error) {
+        console.error("GET /api/conversations failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, errorStatus(error)),
+            userSafeMessage(error, "Could not list conversations."),
+        );
+    }
+}
+
+
+async function handleConversationsDeleteAll(response) {
+    try {
+        const result = await forgetAllConversations();
+        sendJson(response, 200, result);
+    } catch (error) {
+        console.error("DELETE /api/conversations failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, errorStatus(error)),
+            userSafeMessage(error, "Could not forget conversation history."),
+        );
+    }
+}
+
+
+async function handleConversationDelete(response, conversationId) {
+    try {
+        const result = await forgetConversation(conversationId);
+        sendJson(response, 200, result);
+    } catch (error) {
+        console.error(
+            `DELETE /api/conversations/${conversationId} failed:`,
+            error.message,
+        );
+        sendError(
+            response,
+            clientErrorStatus(error, errorStatus(error)),
+            userSafeMessage(error, "Could not delete that conversation."),
         );
     }
 }
@@ -461,6 +528,10 @@ async function handleMemoryStatusGet(response) {
             indexExists: status.indexExists,
             indexedAt: status.indexedAt,
             transcriptMessages: status.transcriptMessages,
+            currentConversationId: status.currentConversationId,
+            currentMessages: status.currentMessages,
+            archivedConversations: status.archivedConversations,
+            totalConversations: status.totalConversations,
             memoryUnits: status.memoryUnits,
             chunks: status.chunks,
             stale: status.stale,
@@ -489,6 +560,10 @@ async function handleMemoryIndexPost(response) {
                 indexExists: status.indexExists,
                 indexedAt: status.indexedAt,
                 transcriptMessages: status.transcriptMessages,
+                currentConversationId: status.currentConversationId,
+                currentMessages: status.currentMessages,
+                archivedConversations: status.archivedConversations,
+                totalConversations: status.totalConversations,
                 memoryUnits: status.memoryUnits,
                 chunks: status.chunks,
                 stale: status.stale,
@@ -982,6 +1057,52 @@ async function handleRequest(request, response) {
             return;
         }
 
+        if (pathname === "/api/conversations/new") {
+            if (!requireMethod(request, response, ["POST"])) {
+                return;
+            }
+
+            await handleConversationsNewPost(response);
+            return;
+        }
+
+        if (pathname === "/api/conversations") {
+            if (request.method === "GET") {
+                await handleConversationsGet(response);
+                return;
+            }
+
+            if (request.method === "DELETE") {
+                await handleConversationsDeleteAll(response);
+                return;
+            }
+
+            sendError(
+                response,
+                405,
+                `Method ${request.method} is not allowed for this route.`,
+            );
+            return;
+        }
+
+        {
+            const conversationDeleteMatch = pathname.match(
+                /^\/api\/conversations\/([^/]+)$/,
+            );
+
+            if (conversationDeleteMatch) {
+                if (!requireMethod(request, response, ["DELETE"])) {
+                    return;
+                }
+
+                const conversationId = decodeURIComponent(
+                    conversationDeleteMatch[1],
+                );
+                await handleConversationDelete(response, conversationId);
+                return;
+            }
+        }
+
         {
             const transcriptPatchMatch = pathname.match(
                 /^\/api\/transcript\/messages\/([^/]+)$/,
@@ -1202,6 +1323,7 @@ async function handleRequest(request, response) {
 
 async function main() {
     const { loaded } = await initializeChat();
+    await initializeConversationLifecycle();
     const transcriptInit = await initializeTranscript();
     await initializeConversationMemory();
 
@@ -1220,6 +1342,7 @@ async function main() {
         } else {
             console.log("Conversation transcript ready.");
         }
+        console.log("Conversation archive ready.");
         console.log("Conversation Memory ready.");
     });
 }

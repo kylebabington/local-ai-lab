@@ -31,6 +31,20 @@ const {
     _test,
 } = await import("../lib/conversation-transcript.js");
 
+
+async function currentConversationId() {
+    const transcript = await getTranscript();
+    return transcript.conversationId;
+}
+
+async function appendToCurrent(messages) {
+    return appendMessages(await currentConversationId(), messages);
+}
+
+async function patchCurrent(id, patch) {
+    return patchMessage(await currentConversationId(), id, patch);
+}
+
 const results = [];
 
 
@@ -97,7 +111,7 @@ async function testFailedTurnPersistence() {
     await resetSandbox();
     await initializeTranscript();
 
-    await appendMessages([sampleUser()]);
+    await appendToCurrent([sampleUser()]);
 
     // Simulate File backend failure: no assistant append.
     _resetTranscriptStateForTests();
@@ -127,8 +141,8 @@ async function testAppendIdempotent() {
     await resetSandbox();
     await initializeTranscript();
 
-    await appendMessages([sampleUser(), sampleAssistant()]);
-    const second = await appendMessages([sampleUser()]);
+    await appendToCurrent([sampleUser(), sampleAssistant()]);
+    const second = await appendToCurrent([sampleUser()]);
 
     if (second.appended !== 0) {
         throw new Error(`Expected 0 appended on duplicate, got ${second.appended}`);
@@ -147,7 +161,7 @@ async function testPatchApprovalStatus() {
     await resetSandbox();
     await initializeTranscript();
 
-    await appendMessages([
+    await appendToCurrent([
         {
             id: "assistant-approval",
             role: "assistant",
@@ -165,7 +179,7 @@ async function testPatchApprovalStatus() {
         },
     ]);
 
-    const patched = await patchMessage("assistant-approval", {
+    const patched = await patchCurrent("assistant-approval", {
         approvalStatus: "expired",
     });
 
@@ -182,7 +196,7 @@ async function testPatchApprovalStatus() {
     }
 
     await expectThrow(
-        () => patchMessage("assistant-approval", { contextMode: "chat" }),
+        () => patchCurrent("assistant-approval", { contextMode: "chat" }),
         "immutable",
     );
 
@@ -194,7 +208,7 @@ async function testDeepSanitize() {
     await resetSandbox();
     await initializeTranscript();
 
-    const result = await appendMessages([
+    const result = await appendToCurrent([
         sampleAssistant({
             id: "assistant-sanitize",
             sources: [
@@ -226,7 +240,7 @@ async function testDeepSanitize() {
         throw new Error("Tool internals leaked into transcript.");
     }
 
-    const fileResult = await appendMessages([
+    const fileResult = await appendToCurrent([
         sampleAssistant({
             id: "file-source-ok",
             sources: [
@@ -257,35 +271,45 @@ async function testDeepSanitize() {
 
 async function testSizeGuard() {
     await resetSandbox();
+    const previousMax = process.env.LOCAL_AI_TRANSCRIPT_MAX_BYTES;
     process.env.LOCAL_AI_TRANSCRIPT_MAX_BYTES = "400";
     _resetTranscriptStateForTests();
-    await initializeTranscript();
 
-    await appendMessages([
-        sampleUser({
-            id: "small-user",
-            content: "hi",
-        }),
-    ]);
+    try {
+        await initializeTranscript();
 
-    await expectThrow(
-        () =>
-            appendMessages([
-                sampleAssistant({
-                    id: "huge",
-                    content: "x".repeat(2000),
-                }),
-            ]),
-        "exceed",
-    );
+        await appendToCurrent([
+            sampleUser({
+                id: "small-user",
+                content: "hi",
+            }),
+        ]);
 
-    const { messages } = await getTranscript();
-    if (messages.length !== 1) {
-        throw new Error("Size guard must leave previous transcript untouched.");
+        await expectThrow(
+            () =>
+                appendToCurrent([
+                    sampleAssistant({
+                        id: "huge",
+                        content: "x".repeat(2000),
+                    }),
+                ]),
+            "exceed",
+        );
+
+        const { messages } = await getTranscript();
+        if (messages.length !== 1) {
+            throw new Error("Size guard must leave previous transcript untouched.");
+        }
+
+        if (!(await getTranscript()).conversationId) {
+            throw new Error("conversationId must remain after rejected write.");
+        }
+
+        pass("size guard", "rejects oversized write without deleting history");
+    } finally {
+        process.env.LOCAL_AI_TRANSCRIPT_MAX_BYTES =
+            previousMax ?? String(8 * 1024);
     }
-
-    process.env.LOCAL_AI_TRANSCRIPT_MAX_BYTES = String(8 * 1024);
-    pass("size guard", "rejects oversized write without deleting history");
 }
 
 
@@ -364,7 +388,7 @@ async function testMigrationOnce() {
 async function testClear() {
     await resetSandbox();
     await initializeTranscript();
-    await appendMessages([sampleUser(), sampleAssistant()]);
+    await appendToCurrent([sampleUser(), sampleAssistant()]);
     await clearTranscript();
     const { messages } = await getTranscript();
     if (messages.length !== 0) {
@@ -415,7 +439,7 @@ async function testRealPathsUntouched() {
 
     await resetSandbox();
     await initializeTranscript();
-    await appendMessages([sampleUser({ id: "sandbox-only" })]);
+    await appendToCurrent([sampleUser({ id: "sandbox-only" })]);
     await clearTranscript();
 
     let afterTranscript = null;

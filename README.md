@@ -25,8 +25,10 @@ interfaces
 
 shared logic
 ├── lib/chat.js     normal chat + chat-history.json (model context)
-├── lib/conversation-transcript.js  UI transcript (display only)
-├── lib/conversation-memory.js  derived semantic memory over the transcript
+├── lib/conversation-transcript.js  current UI transcript (display only)
+├── lib/conversation-archive.js     historical conversations (per-id files)
+├── lib/conversation-lifecycle.js   New / Forget orchestration
+├── lib/conversation-memory.js  derived semantic memory over archive + current
 ├── lib/rag.js      project retrieval
 ├── lib/agent.js    Computer-mode tools + approvals
 ├── lib/activity.js tool audit log
@@ -43,7 +45,9 @@ React UI  →  Vite /api proxy  →  server.js  →  lib/chat.js, lib/rag.js, or
 The browser never calls `localhost:11434`.
 
 * `lib/chat.js` — Chat-mode model conversation (`chat-history.json`)
-* `lib/conversation-transcript.js` — unified UI transcript (`data/conversation-transcript.json`)
+* `lib/conversation-transcript.js` — current UI transcript (`data/conversation-transcript.json`)
+* `lib/conversation-archive.js` — archived conversations (`data/conversation-archive/`)
+* `lib/conversation-lifecycle.js` — New conversation / Forget orchestration
 * `lib/conversation-memory.js` — derived Conversation Memory index (`data/conversation-memory-index.json`)
 * `lib/rag.js` — scan, chunk, index, search, and ask about the project
 * `lib/agent.js` — Computer-mode tool loop and pending approvals
@@ -190,20 +194,23 @@ Useful commands inside the chat:
 
 ### History behavior
 
-* Normal chat model messages are saved to `chat-history.json`
-* The Chat page UI transcript is saved to `data/conversation-transcript.json` (all modes)
-* Conversation Memory is derived into `data/conversation-memory-index.json` (embeddings + span references only)
+* Normal chat model messages are saved to `chat-history.json` (current conversation only)
+* The Chat page UI transcript is saved to `data/conversation-transcript.json` (current mixed-mode conversation)
+* Completed conversations are archived under `data/conversation-archive/` (`manifest.json` + per-id JSON files)
+* Conversation Memory is derived into `data/conversation-memory-index.json` (embeddings + span references over archive + current)
 * Loaded file contents are **not** written into either store
 * `/rag` retrieved chunks are **not** written into Chat model history or the UI transcript
-* Clear conversation cancels pending Computer approvals, resets Chat model history, empties the transcript, and resets Conversation Memory
+* **New conversation** archives the current thread (if non-empty), resets Chat model history, and starts a fresh current conversation — long-term Conversation Memory is preserved
+* **Forget all conversation history** (Memory page) permanently deletes current + archived history and resets Conversation Memory
 
 ### Conversation Memory
 
-* Indexes mixed-mode transcript turns for semantic recall weeks or months later
-* Syncs after transcript writes; transcript persistence never depends on embeddings
+* Indexes mixed-mode turns across the current transcript and archived conversations for semantic recall weeks or months later
+* Syncs after transcript writes and lifecycle changes; transcript/archive persistence never depends on embeddings
 * Injects a small retrieved context into normal Chat only (not Computer / Project / File ask paths)
 * APIs: `GET /api/memory/status`, `POST /api/memory/index`, `POST /api/memory/search`
-* Verify with `npm run verify:memory`
+* Lifecycle: `POST /api/conversations/new`, `GET /api/conversations`, `DELETE /api/conversations/:id`, `DELETE /api/conversations`
+* Verify with `npm run verify:memory` and `npm run verify:lifecycle`
 
 ---
 
@@ -349,7 +356,7 @@ That keeps answers more grounded in the real project files and avoids stuffing t
 
 ## Notes
 
-* `.local-ai-index.json`, `chat-history.json`, `data/conversation-transcript.json`, `data/conversation-memory-index.json`, and `data/tool-activity.jsonl` are ignored by git.
+* `.local-ai-index.json`, `chat-history.json`, `data/conversation-transcript.json`, `data/conversation-archive/`, `data/conversation-memory-index.json`, and `data/tool-activity.jsonl` are ignored by git.
 * Sensitive files named `.env` or `.env.*` are never indexed.
 * Retrieved project text is treated as data, not instructions.
 * Lock files and common generated folders are skipped during scanning.
