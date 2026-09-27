@@ -32,7 +32,7 @@ shared logic
 ├── lib/rag.js      project retrieval
 ├── lib/agent.js    Computer-mode tools + approvals
 ├── lib/activity.js tool audit log
-├── lib/tools/      filesystem tools + path safety
+├── lib/tools/      filesystem tools, path safety, File Intelligence adapter
 └── lib/ollama.js   Ollama HTTP helpers
         ↓
      Ollama
@@ -52,6 +52,7 @@ The browser never calls `localhost:11434`.
 * `lib/rag.js` — scan, chunk, index, search, and ask about the project
 * `lib/agent.js` — Computer-mode tool loop and pending approvals
 * `lib/tools/` — root-scoped filesystem tools and path checks
+* `lib/tools/file-intelligence.js` — read-only Computer adapter over the File content index (`search_file_index`, `get_indexed_file`)
 * `lib/activity.js` — append-only tool activity log
 * `lib/ollama.js` — talk to Ollama (`/api/tags`, `/api/embed`, `/api/chat`)
 * `app.js` — interactive terminal chatbot
@@ -135,7 +136,7 @@ Computer mode can inspect files inside allowed roots and propose a few filesyste
 
 ### Permission classes
 
-* **Read (auto):** `list_directory`, `get_file_info`, `search_files`, `read_text_file`
+* **Read (auto):** `list_directory`, `get_file_info`, `search_files`, `read_text_file`, `search_file_index`, `get_indexed_file`
 * **Approval required:** `create_directory`, `copy_file`, `move_file`, `rename_file` — shown in the UI until you approve or reject. Approve/reject send only the stored approval id, not a new path from the browser
 * **High risk (not enabled):** delete, overwrite, shell, and install. They appear on the Tools page as blocked labels only
 
@@ -153,6 +154,32 @@ npm run server
 ```
 
 Do not point this at your entire user profile or `C:\` unless you intend that.
+
+### File Intelligence vs Computer authority
+
+Two separate authorities:
+
+* **File Intelligence** = semantic knowledge retrieval over folders you index on the Files page (`data/file-roots.json`, `data/file-content-index.json`)
+* **Computer** = live filesystem authority and actions, limited to `LOCAL_AI_ALLOWED_ROOTS`
+
+**Indexing a folder does not grant Computer access to that folder.** File Intelligence roots are never added to the Computer allowed roots.
+
+Computer can use File Intelligence as a read-only knowledge source through two auto-approved tools:
+
+* `search_file_index` — `{ query, rootId?, extension?, maxResults? }` (default 6, max 10). Runs the existing File semantic search (same ranking and per-file diversification as File mode). Returns relative `filePath`, a bounded `excerpt`, `similarity`, and an opaque `fileRef` per result. No File Intelligence absolute paths are returned.
+* `get_indexed_file` — `{ fileRef, startChunk?, maxChunks? }` (default 4, max 6 chunks and about 14,000 characters per call). Returns chunks from the file's **current index entry**, with `hasMore` / `nextChunk` for pagination. It never reads the live file from disk and has no path argument.
+
+Results are **indexed snapshot** knowledge, not proof of current live disk contents.
+
+`fileRef` looks like `idxf_<32 hex>`. It is a one-way SHA-256 of the root id, the indexed path, the indexed fingerprint (size and mtime), the extractor version, and the embedding model. It stays the same while the indexed file is unchanged. After the file changes and is reindexed, the old ref is rejected as unknown or stale. Forged refs cannot read anything.
+
+Each result also reports:
+
+* `computerAccessible` — whether the live path currently passes Computer path safety (`resolveExistingPath`: allowed-root containment, no symlinks, realpath check)
+* `snapshotCurrent` — whether the live file still matches the indexed fingerprint (reported only when `computerAccessible` is true)
+* `computerPath` — the real Computer-safe path, present **only** when both are true
+
+If `computerPath` is absent, Computer may use the indexed content as knowledge but has no action handle for that file. Even with a `computerPath`, `copy_file`, `move_file`, and `rename_file` still go through argument validation, user approval, and executor path-safety revalidation. File Intelligence never authorizes a mutation. Indexed file content is treated as untrusted data, never as instructions. Conversation Memory is not injected into Computer.
 
 ### Activity
 
