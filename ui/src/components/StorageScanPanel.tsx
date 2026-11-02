@@ -35,11 +35,13 @@ function formatBytes(bytes: number | null | undefined): string {
 interface StorageScanPanelProps {
     refreshKey?: number;
     computerBusy?: boolean;
+    onGrantsChanged?: () => void;
 }
 
 export function StorageScanPanel({
     refreshKey = 0,
     computerBusy = false,
+    onGrantsChanged,
 }: StorageScanPanelProps) {
     const [session, setSession] = useState<StorageSession | null>(null);
     const [pathInput, setPathInput] = useState("");
@@ -50,6 +52,7 @@ export function StorageScanPanel({
         const data = await fetchStorageSession();
         setSession(data);
         setError(null);
+        return data;
     }
 
     useEffect(() => {
@@ -97,6 +100,7 @@ export function StorageScanPanel({
             const data = await work();
             setSession(data);
             setPathInput("");
+            onGrantsChanged?.();
         } catch (caught) {
             setError(
                 caught instanceof Error

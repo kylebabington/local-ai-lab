@@ -335,6 +335,99 @@ export interface StorageSession {
     scanning: boolean;
 }
 
+export type OffloadSafety =
+    | "likely_portable"
+    | "review_required"
+    | "excluded";
+
+export interface StorageVolume {
+    mount: string;
+    label: string | null;
+    fileSystem: string | null;
+    totalBytes: number;
+    freeBytes: number | null;
+    usedPercent: number | null;
+    driveType: string | null;
+    busType: string | null;
+    classification: "internal" | "removable" | "external" | "unknown";
+    confidence: string;
+    uncertainty: string | null;
+    volumeId: string | null;
+    volumeSerialNumber: string | null;
+    diskUniqueId: string | null;
+    identityConfidence: string;
+}
+
+export interface StorageDriveSnapshot {
+    volumes: StorageVolume[];
+    queriedAt?: string;
+    interpretationLimits?: string[];
+}
+
+export interface OffloadPlanEntry {
+    id: string;
+    sourcePath: string;
+    destinationPath: string;
+    relativePath: string;
+    sizeBytes: number;
+    mtime: string;
+    safety: OffloadSafety;
+    dependencyConcerns: string[];
+    concerns: string[];
+    destinationConflict: string | null;
+    selectable: boolean;
+    grantId: string;
+}
+
+export interface OffloadPlan {
+    id: string;
+    createdAt: string;
+    complete: boolean;
+    incomplete: {
+        truncated: boolean;
+        timedOut: boolean;
+        cancelled: boolean;
+        limit: string | null;
+    } | null;
+    destination: {
+        volumeId: string | null;
+        mount: string;
+        label: string | null;
+        fileSystem: string | null;
+        freeBytes: number | null;
+        totalBytes: number | null;
+        classification: string;
+        folderName: string;
+    };
+    candidateCount: number;
+    selectableCount: number;
+    estimatedTransferBytes: number;
+    potentialRecoverableBytesAfterVerifiedRemoval: number;
+    estimatesNote: string;
+    destinationCapacityWarning: string | null;
+    conflicts: unknown[];
+    invalidated: boolean;
+    invalidReason: string | null;
+    entries: OffloadPlanEntry[];
+    lockedManifestId: string | null;
+}
+
+export interface LockedManifest {
+    manifestId: string;
+    hash: string;
+    planId: string;
+    complete: boolean;
+    incomplete: OffloadPlan["incomplete"];
+    entryCount: number;
+    estimatedTransferBytes: number;
+    potentialRecoverableBytesAfterVerifiedRemoval: number;
+    estimatesNote: string;
+    destination: OffloadPlan["destination"];
+    entries: OffloadPlanEntry[];
+    copyAvailable: boolean;
+    message: string;
+}
+
 export const DISPLAY_MODEL = "qwen3:4b-instruct";
 
 export const DEFAULT_SETTINGS: AppSettings = {

@@ -18,6 +18,7 @@ data/conversation-memory-index.json
 .conversation-lifecycle-test-sandbox/
 .phase4c-test-sandbox/
 .storage-scan-test-sandbox/
+.storage-offload-test-sandbox/
 
 # Frontend (Vite)
 ui/node_modules/

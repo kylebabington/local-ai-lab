@@ -3,7 +3,9 @@ import { useEffect, useRef, useState } from "react";
 import { ChatComposer } from "../components/ChatComposer";
 import { ChatMessageItem } from "../components/ChatMessage";
 import { EmptyState } from "../components/EmptyState";
+import { StorageOffloadPanel } from "../components/StorageOffloadPanel";
 import { StorageScanPanel } from "../components/StorageScanPanel";
+import { fetchStorageSession } from "../services/storageService";
 import {
     approveAction,
     listApprovals,
@@ -114,12 +116,38 @@ export function ChatPage() {
     const [historyError, setHistoryError] = useState<string | null>(null);
     const [saveError, setSaveError] = useState<string | null>(null);
     const [scanRefresh, setScanRefresh] = useState(0);
+    const [hasScanGrants, setHasScanGrants] = useState(false);
     const logRef = useRef<HTMLDivElement>(null);
     const conversationIdRef = useRef<string | null>(null);
 
     useEffect(() => {
         conversationIdRef.current = conversationId;
     }, [conversationId]);
+
+    useEffect(() => {
+        if (contextMode !== "computer") {
+            setHasScanGrants(false);
+            return;
+        }
+
+        let cancelled = false;
+
+        fetchStorageSession()
+            .then((session) => {
+                if (!cancelled) {
+                    setHasScanGrants((session.grants?.length ?? 0) > 0);
+                }
+            })
+            .catch(() => {
+                if (!cancelled) {
+                    setHasScanGrants(false);
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [contextMode, scanRefresh]);
 
     useEffect(() => {
         let cancelled = false;
@@ -468,10 +496,19 @@ export function ChatPage() {
             </div>
 
             {contextMode === "computer" ? (
-                <StorageScanPanel
-                    refreshKey={scanRefresh}
-                    computerBusy={busy || approvalBusyId !== null}
-                />
+                <>
+                    <StorageScanPanel
+                        refreshKey={scanRefresh}
+                        computerBusy={busy || approvalBusyId !== null}
+                        onGrantsChanged={() =>
+                            setScanRefresh((value) => value + 1)
+                        }
+                    />
+                    <StorageOffloadPanel
+                        refreshKey={scanRefresh}
+                        hasGrants={hasScanGrants}
+                    />
+                </>
             ) : null}
 
             <div className="chat-log" ref={logRef} tabIndex={0} aria-label="Conversation">

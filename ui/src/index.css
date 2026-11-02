@@ -955,6 +955,31 @@ h3 {
     border-top: 1px solid var(--border);
 }
 
+.storage-offload-dest {
+    display: grid;
+    grid-template-columns: minmax(12rem, 1.4fr) minmax(8rem, 0.8fr) auto;
+    gap: var(--space-3);
+    align-items: end;
+}
+
+.storage-offload-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.storage-offload-table-wrap {
+    overflow: auto;
+    max-height: 22rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+}
+
+.storage-offload-plan {
+    display: grid;
+    gap: var(--space-3);
+}
+
 .chat-composer {
     display: grid;
     gap: var(--space-2);
@@ -1346,7 +1371,8 @@ h3 {
     .tool-action-card-footer,
     .files-root-form,
     .files-root-item,
-    .files-pager {
+    .files-pager,
+    .storage-offload-dest {
         grid-template-columns: 1fr;
     }
 

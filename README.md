@@ -136,7 +136,7 @@ Computer mode can inspect files inside allowed roots and propose a few filesyste
 
 ### Permission classes
 
-* **Read (auto):** `list_directory`, `get_file_info`, `search_files`, `read_text_file`, `search_file_index`, `get_indexed_file`, `inspect_processes`, `inspect_event_log`, `inspect_system_health`, `inspect_services`, `inspect_network`, `inspect_resource_consumers`, `inspect_disk_usage`
+* **Read (auto):** `list_directory`, `get_file_info`, `search_files`, `read_text_file`, `search_file_index`, `get_indexed_file`, `inspect_processes`, `inspect_event_log`, `inspect_system_health`, `inspect_services`, `inspect_network`, `inspect_resource_consumers`, `inspect_disk_usage`, `inspect_external_drives`, `plan_storage_offload`
 * **Approval required:** `create_directory`, `copy_file`, `move_file`, `rename_file`, `request_storage_scan` — shown in the UI until you approve or reject. Approve/reject send only the stored approval id, not a new path from the browser
 * **High risk (not enabled):** delete, overwrite, shell, and install. They appear on the Tools page as blocked labels only
 
@@ -149,6 +149,14 @@ Windows diagnostics never run a shell. Failed event-log queries are not treated 
 `inspect_disk_usage` does **not** use `LOCAL_AI_ALLOWED_ROOTS`. In Computer mode, pick folders (Downloads, Documents, Pictures, Videos, Desktop, or a typed path). Those grants are read-only, in-memory, and expire when you end the scan session, start a new conversation, restart the server, or after idle timeout. Whole drives, the user profile root, Windows, and Program Files cannot be granted.
 
 This is a third authority, separate from Computer filesystem roots and File Intelligence.
+
+### External-drive offload planning (read-only)
+
+`inspect_external_drives` lists volumes with stable identity when available and classifies them as internal, removable, external, or unknown (with uncertainty).
+
+`plan_storage_offload` proposes candidates from **granted** folders only. Safety labels are `likely_portable`, `review_required`, or `excluded` — never “safe to move.” Age and extension are not proof a file is unused. Destination paths preserve relative structure under `LocalAI-Offload\<folder>\...`.
+
+The Computer UI lets you review each file, select exact entries, and **lock** an immutable manifest bound to those entry IDs and the current session. Preparing or locking a plan does **not** free disk space. Copy/verify is not enabled yet.
 
 ### Allowed roots
 

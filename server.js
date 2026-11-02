@@ -91,6 +91,7 @@ import {
     cancelSessionScan,
     ensureSession,
     forbiddenCrossOriginMessage,
+    getLastDriveSnapshot,
     revokeAllSessionGrants,
     revokeSessionGrant,
     runWithSession,
@@ -99,6 +100,13 @@ import {
     describeStorageSession,
     grantScanFolder,
 } from "./lib/tools/storage.js";
+import {
+    getPublicPlan,
+    listPublicPlans,
+    lockManifestFromSelection,
+    planStorageOffload,
+    refreshDriveSnapshot,
+} from "./lib/tools/storage-offload.js";
 
 
 const HOST = "127.0.0.1";
@@ -1118,6 +1126,125 @@ async function handleStorageCancelPost(response) {
 }
 
 
+async function handleStorageDrivesGet(response) {
+    try {
+        const snapshot = getLastDriveSnapshot();
+        if (snapshot?.volumes) {
+            sendJson(response, 200, snapshot);
+            return;
+        }
+
+        const result = await refreshDriveSnapshot();
+        sendJson(response, 200, result);
+    } catch (error) {
+        console.error("GET /api/storage/drives failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, errorStatus(error)),
+            userSafeMessage(error, "Could not inspect drives."),
+        );
+    }
+}
+
+
+async function handleStorageDrivesRefreshPost(response) {
+    try {
+        const result = await refreshDriveSnapshot();
+        sendJson(response, 200, result);
+    } catch (error) {
+        console.error("POST /api/storage/drives/refresh failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, errorStatus(error)),
+            userSafeMessage(error, "Could not refresh drives."),
+        );
+    }
+}
+
+
+async function handleStoragePlansGet(response) {
+    try {
+        sendJson(response, 200, { plans: listPublicPlans() });
+    } catch (error) {
+        console.error("GET /api/storage/plans failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error),
+            userSafeMessage(error, "Could not list storage plans."),
+        );
+    }
+}
+
+
+async function handleStoragePlanGet(response, planId) {
+    try {
+        const plan = getPublicPlan(planId);
+        if (!plan) {
+            sendError(response, 404, "Unknown storage plan.");
+            return;
+        }
+        sendJson(response, 200, { plan });
+    } catch (error) {
+        console.error("GET /api/storage/plans/:id failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, 404),
+            userSafeMessage(error, "Could not load that storage plan."),
+        );
+    }
+}
+
+
+async function handleStoragePlanPost(request, response) {
+    let body;
+
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    try {
+        const result = await planStorageOffload(body ?? {});
+        sendJson(response, 200, result);
+    } catch (error) {
+        console.error("POST /api/storage/plans failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error),
+            userSafeMessage(error, "Could not create an offload plan."),
+        );
+    }
+}
+
+
+async function handleStoragePlanSelectionPost(request, response, planId) {
+    let body;
+
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    const entryIds = Array.isArray(body.entryIds) ? body.entryIds : null;
+
+    try {
+        const result = lockManifestFromSelection(planId, entryIds);
+        sendJson(response, 200, result);
+    } catch (error) {
+        console.error("POST /api/storage/plans/:id/selection failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not lock that file selection."),
+        );
+    }
+}
+
+
 async function routeRequest(request, response, url) {
     const pathname = url.pathname;
 
@@ -1492,6 +1619,80 @@ async function routeRequest(request, response, url) {
                 await handleStorageGrantDelete(
                     response,
                     decodeURIComponent(grantDeleteMatch[1]),
+                );
+                return;
+            }
+        }
+
+        if (pathname === "/api/storage/drives") {
+            if (!requireMethod(request, response, ["GET"])) {
+                return;
+            }
+
+            await handleStorageDrivesGet(response);
+            return;
+        }
+
+        if (pathname === "/api/storage/drives/refresh") {
+            if (!requireMethod(request, response, ["POST"])) {
+                return;
+            }
+
+            await handleStorageDrivesRefreshPost(response);
+            return;
+        }
+
+        if (pathname === "/api/storage/plans") {
+            if (request.method === "GET") {
+                await handleStoragePlansGet(response);
+                return;
+            }
+
+            if (request.method === "POST") {
+                await handleStoragePlanPost(request, response);
+                return;
+            }
+
+            sendError(
+                response,
+                405,
+                `Method ${request.method} is not allowed for this route.`,
+            );
+            return;
+        }
+
+        {
+            const planSelectionMatch = pathname.match(
+                /^\/api\/storage\/plans\/([^/]+)\/selection$/,
+            );
+
+            if (planSelectionMatch) {
+                if (!requireMethod(request, response, ["POST"])) {
+                    return;
+                }
+
+                await handleStoragePlanSelectionPost(
+                    request,
+                    response,
+                    decodeURIComponent(planSelectionMatch[1]),
+                );
+                return;
+            }
+        }
+
+        {
+            const planGetMatch = pathname.match(
+                /^\/api\/storage\/plans\/([^/]+)$/,
+            );
+
+            if (planGetMatch) {
+                if (!requireMethod(request, response, ["GET"])) {
+                    return;
+                }
+
+                await handleStoragePlanGet(
+                    response,
+                    decodeURIComponent(planGetMatch[1]),
                 );
                 return;
             }
