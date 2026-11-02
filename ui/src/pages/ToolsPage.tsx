@@ -81,9 +81,12 @@ export function ToolsPage() {
             <div className="page-stack">
                 <p className="lede">
                     Tools run on the Node backend, never in the browser. Read
-                    tools execute immediately. Create, copy, move, and rename
-                    wait for approval. Delete, overwrite, shell, and install are
-                    not enabled.
+                    tools — files, File Intelligence, and Windows diagnostics —
+                    execute immediately. Storage scans use a separate,
+                    session-only folder grant and never expand Computer
+                    filesystem roots. Create, copy, move, rename, and scan-folder
+                    grants wait for approval. Delete, overwrite, shell, and
+                    install are not enabled.
                 </p>
 
                 {loading ? <p>Loading tools…</p> : null}

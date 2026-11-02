@@ -30,7 +30,10 @@ export async function apiRequest<T>(path: string, init?: RequestInit): Promise<T
     let response: Response;
 
     try {
-        response = await fetch(path, init);
+        response = await fetch(path, {
+            credentials: "same-origin",
+            ...init,
+        });
     } catch {
         throw new Error(
             "Could not reach the local API. Start it with npm run server.",

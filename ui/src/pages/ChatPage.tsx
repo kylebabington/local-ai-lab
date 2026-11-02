@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { ChatComposer } from "../components/ChatComposer";
 import { ChatMessageItem } from "../components/ChatMessage";
 import { EmptyState } from "../components/EmptyState";
+import { StorageScanPanel } from "../components/StorageScanPanel";
 import {
     approveAction,
     listApprovals,
@@ -87,7 +88,7 @@ function reconcileApprovals(
 
 function kickerForMode(mode: ChatContextMode): string {
     if (mode === "computer") {
-        return "Next message uses Computer tools · read tools run immediately · changes need approval";
+        return "Next message uses Computer tools · files and Windows diagnostics run immediately · scan folders are session-only · changes need approval";
     }
 
     if (mode === "project") {
@@ -112,6 +113,7 @@ export function ChatPage() {
     const [error, setError] = useState<string | null>(null);
     const [historyError, setHistoryError] = useState<string | null>(null);
     const [saveError, setSaveError] = useState<string | null>(null);
+    const [scanRefresh, setScanRefresh] = useState(0);
     const logRef = useRef<HTMLDivElement>(null);
     const conversationIdRef = useRef<string | null>(null);
 
@@ -270,6 +272,7 @@ export function ChatPage() {
         try {
             if (contextMode === "computer") {
                 const response = await sendAgentMessage(text);
+                setScanRefresh((value) => value + 1);
                 const assistantMessage = buildAssistantFromAgent(
                     response,
                     contextMode,
@@ -326,6 +329,7 @@ export function ChatPage() {
             conversationIdRef.current = next.conversationId;
             setMessages([]);
             setHistoryError(null);
+            setScanRefresh((value) => value + 1);
         } catch (caught) {
             setError(
                 caught instanceof Error
@@ -373,6 +377,7 @@ export function ChatPage() {
                 decision === "approve"
                     ? await approveAction(id)
                     : await rejectAction(id);
+            setScanRefresh((value) => value + 1);
 
             const previousToolCount = target.toolUses?.length ?? 0;
             const assistantMessage = buildAssistantFromAgent(
@@ -461,6 +466,13 @@ export function ChatPage() {
                     New conversation
                 </button>
             </div>
+
+            {contextMode === "computer" ? (
+                <StorageScanPanel
+                    refreshKey={scanRefresh}
+                    computerBusy={busy || approvalBusyId !== null}
+                />
+            ) : null}
 
             <div className="chat-log" ref={logRef} tabIndex={0} aria-label="Conversation">
                 {loadingHistory ? (

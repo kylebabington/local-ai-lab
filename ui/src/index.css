@@ -886,6 +886,75 @@ h3 {
     gap: var(--space-2);
 }
 
+.storage-scan-panel {
+    display: grid;
+    gap: var(--space-3);
+    padding: var(--space-4);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg-surface);
+}
+
+.storage-scan-header {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-3);
+    align-items: flex-start;
+}
+
+.storage-scan-header h2 {
+    margin: 0;
+    font-size: 1rem;
+}
+
+.storage-scan-header p,
+.storage-scan-empty,
+.storage-scan-scope,
+.storage-scan-discovery {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.86rem;
+}
+
+.storage-scan-suggestions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+}
+
+.storage-scan-chip {
+    border: 1px solid var(--border-strong);
+    border-radius: 999px;
+    background: var(--bg-surface-2);
+    color: var(--text);
+    padding: 0.3rem 0.75rem;
+    font: inherit;
+    font-size: 0.82rem;
+    cursor: pointer;
+}
+
+.storage-scan-chip:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.storage-scan-grants {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: var(--space-2);
+}
+
+.storage-scan-grants li {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: var(--space-3);
+    align-items: center;
+    padding: var(--space-2) 0;
+    border-top: 1px solid var(--border);
+}
+
 .chat-composer {
     display: grid;
     gap: var(--space-2);

@@ -1026,7 +1026,7 @@ function hasComputerOllamaCallSite(matches) {
             /chatWithTools\s*\(/.test(item.content) ||
             /chatWithOllamaTools\s*\(/.test(item.content);
 
-        return called && !/\bnumCtx\s*:/.test(item.content);
+        return called && /\bAGENT_NUM_CTX\b/.test(item.content) && /\bnumCtx\s*:/.test(item.content);
     });
 }
 
@@ -1072,7 +1072,7 @@ function assertContextSizeRetrieval(matches) {
     }
 
     if (!hasComputerOllamaCallSite(matches)) {
-        missing.push("Computer chatWithTools()/chatWithOllamaTools() call site omitting numCtx");
+        missing.push("Computer chatWithTools() call site requesting AGENT_NUM_CTX");
     }
 
     if (!hasOptionalNumCtxHelper(matches)) {

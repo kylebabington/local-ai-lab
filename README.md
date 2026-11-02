@@ -136,11 +136,19 @@ Computer mode can inspect files inside allowed roots and propose a few filesyste
 
 ### Permission classes
 
-* **Read (auto):** `list_directory`, `get_file_info`, `search_files`, `read_text_file`, `search_file_index`, `get_indexed_file`
-* **Approval required:** `create_directory`, `copy_file`, `move_file`, `rename_file` — shown in the UI until you approve or reject. Approve/reject send only the stored approval id, not a new path from the browser
+* **Read (auto):** `list_directory`, `get_file_info`, `search_files`, `read_text_file`, `search_file_index`, `get_indexed_file`, `inspect_processes`, `inspect_event_log`, `inspect_system_health`, `inspect_services`, `inspect_network`, `inspect_resource_consumers`, `inspect_disk_usage`
+* **Approval required:** `create_directory`, `copy_file`, `move_file`, `rename_file`, `request_storage_scan` — shown in the UI until you approve or reject. Approve/reject send only the stored approval id, not a new path from the browser
 * **High risk (not enabled):** delete, overwrite, shell, and install. They appear on the Tools page as blocked labels only
 
 Destinations that already exist are refused. Symbolic links are refused, including a symlink in the middle of a path.
+
+Windows diagnostics never run a shell. Failed event-log queries are not treated as findings. Process presence is not treated as application health.
+
+### Storage scan grants
+
+`inspect_disk_usage` does **not** use `LOCAL_AI_ALLOWED_ROOTS`. In Computer mode, pick folders (Downloads, Documents, Pictures, Videos, Desktop, or a typed path). Those grants are read-only, in-memory, and expire when you end the scan session, start a new conversation, restart the server, or after idle timeout. Whole drives, the user profile root, Windows, and Program Files cannot be granted.
+
+This is a third authority, separate from Computer filesystem roots and File Intelligence.
 
 ### Allowed roots
 

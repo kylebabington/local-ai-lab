@@ -11,6 +11,8 @@
     "verify:transcript": "node scripts/verify-conversation-transcript.js",
     "verify:memory": "node scripts/verify-conversation-memory.js",
     "verify:lifecycle": "node scripts/verify-conversation-lifecycle.js",
+    "verify:windows": "node scripts/verify-windows-tools.js",
+    "verify:storage": "node scripts/verify-storage-scan.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

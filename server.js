@@ -87,6 +87,18 @@ import {
     describeAllowedRoots,
     listTools,
 } from "./lib/tools/registry.js";
+import {
+    cancelSessionScan,
+    ensureSession,
+    forbiddenCrossOriginMessage,
+    revokeAllSessionGrants,
+    revokeSessionGrant,
+    runWithSession,
+} from "./lib/storage-session.js";
+import {
+    describeStorageSession,
+    grantScanFolder,
+} from "./lib/tools/storage.js";
 
 
 const HOST = "127.0.0.1";
@@ -163,7 +175,11 @@ function clientErrorStatus(error, fallback = 400) {
         message.includes("malformed") ||
         message.includes("exceed") ||
         message.includes("invalid") ||
-        message.includes("Add at least one")
+        message.includes("Add at least one") ||
+        message.includes("not allowed") ||
+        message.includes("too broad") ||
+        message.includes("authorized") ||
+        message.includes("grant")
     ) {
         return fallback;
     }
@@ -989,6 +1005,120 @@ async function handleFilesAskPost(request, response) {
 
 async function handleRequest(request, response) {
     const url = new URL(request.url ?? "/", `http://${HOST}:${PORT}`);
+    const method = request.method ?? "GET";
+
+    if (["POST", "PUT", "PATCH", "DELETE"].includes(method)) {
+        const forbidden = forbiddenCrossOriginMessage(request);
+        if (forbidden) {
+            sendError(response, 403, forbidden);
+            return;
+        }
+    }
+
+    const session = ensureSession(request, response);
+
+    try {
+        await runWithSession(session, () =>
+            routeRequest(request, response, url),
+        );
+    } catch (error) {
+        console.error("Unhandled request error:", error.message);
+        sendError(response, 500, "Unexpected server error.");
+    }
+}
+
+
+async function handleStorageSessionGet(response) {
+    try {
+        const payload = await describeStorageSession();
+        sendJson(response, 200, payload);
+    } catch (error) {
+        console.error("GET /api/storage/session failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error),
+            userSafeMessage(error, "Could not load storage scan session."),
+        );
+    }
+}
+
+
+async function handleStorageGrantPost(request, response) {
+    let body;
+
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    const folderPath = typeof body.path === "string" ? body.path : "";
+
+    try {
+        const grant = await grantScanFolder(folderPath);
+        const payload = await describeStorageSession();
+        sendJson(response, 200, { grant, ...payload });
+    } catch (error) {
+        console.error("POST /api/storage/grants failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error),
+            userSafeMessage(error, "Could not grant that scan folder."),
+        );
+    }
+}
+
+
+async function handleStorageGrantDelete(response, grantId) {
+    try {
+        revokeSessionGrant(grantId);
+        const payload = await describeStorageSession();
+        sendJson(response, 200, payload);
+    } catch (error) {
+        console.error("DELETE /api/storage/grants failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, 404),
+            userSafeMessage(error, "Could not revoke that scan folder."),
+        );
+    }
+}
+
+
+async function handleStorageRevokeAllPost(response) {
+    try {
+        revokeAllSessionGrants();
+        const payload = await describeStorageSession();
+        sendJson(response, 200, payload);
+    } catch (error) {
+        console.error("POST /api/storage/grants/revoke-all failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error),
+            userSafeMessage(error, "Could not end the scan session."),
+        );
+    }
+}
+
+
+async function handleStorageCancelPost(response) {
+    try {
+        const result = cancelSessionScan();
+        const payload = await describeStorageSession();
+        sendJson(response, 200, { ...result, ...payload });
+    } catch (error) {
+        console.error("POST /api/storage/cancel failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error),
+            userSafeMessage(error, "Could not cancel the scan."),
+        );
+    }
+}
+
+
+async function routeRequest(request, response, url) {
     const pathname = url.pathname;
 
     try {
@@ -1311,6 +1441,60 @@ async function handleRequest(request, response) {
 
             await handleFilesSearchGet(url, response);
             return;
+        }
+
+        if (pathname === "/api/storage/session") {
+            if (!requireMethod(request, response, ["GET"])) {
+                return;
+            }
+
+            await handleStorageSessionGet(response);
+            return;
+        }
+
+        if (pathname === "/api/storage/grants") {
+            if (!requireMethod(request, response, ["POST"])) {
+                return;
+            }
+
+            await handleStorageGrantPost(request, response);
+            return;
+        }
+
+        if (pathname === "/api/storage/grants/revoke-all") {
+            if (!requireMethod(request, response, ["POST"])) {
+                return;
+            }
+
+            await handleStorageRevokeAllPost(response);
+            return;
+        }
+
+        if (pathname === "/api/storage/cancel") {
+            if (!requireMethod(request, response, ["POST"])) {
+                return;
+            }
+
+            await handleStorageCancelPost(response);
+            return;
+        }
+
+        {
+            const grantDeleteMatch = pathname.match(
+                /^\/api\/storage\/grants\/([^/]+)$/,
+            );
+
+            if (grantDeleteMatch) {
+                if (!requireMethod(request, response, ["DELETE"])) {
+                    return;
+                }
+
+                await handleStorageGrantDelete(
+                    response,
+                    decodeURIComponent(grantDeleteMatch[1]),
+                );
+                return;
+            }
         }
 
         sendError(response, 404, "Route not found.");

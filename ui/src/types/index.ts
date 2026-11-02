@@ -302,6 +302,39 @@ export interface FileSearchResponse {
     files: FileInventoryEntry[];
 }
 
+export interface StorageSuggestion {
+    id: string;
+    label: string;
+    path: string;
+    available: boolean;
+}
+
+export interface StorageGrant {
+    id: string;
+    path: string;
+    addedAt: string;
+    expiresAt: string;
+}
+
+export interface StorageDiscovery {
+    path: string;
+    complete: boolean;
+    filesVisited: number;
+    directoriesVisited: number;
+    totalBytes: number | null;
+    truncated: boolean;
+    timedOut: boolean;
+    cancelled: boolean;
+    queriedAt: string;
+}
+
+export interface StorageSession {
+    grants: StorageGrant[];
+    suggestions: StorageSuggestion[];
+    discovery: StorageDiscovery | null;
+    scanning: boolean;
+}
+
 export const DISPLAY_MODEL = "qwen3:4b-instruct";
 
 export const DEFAULT_SETTINGS: AppSettings = {
