@@ -1,8 +1,16 @@
+import { useState } from "react";
+
 import type { ToolAction, ToolActionStatus } from "../types";
 
 interface ToolActionCardProps {
     action: ToolAction;
-    onApprove: (id: string) => void;
+    onApprove: (
+        id: string,
+        decision?: {
+            acknowledgeIncompleteScan?: boolean;
+            authorizeHydrateCloudFiles?: boolean;
+        },
+    ) => void;
     onReject: (id: string) => void;
 }
 
@@ -33,7 +41,10 @@ export function ToolActionCard({
 }: ToolActionCardProps) {
     const pending = action.status === "pending";
     const busy = Boolean(action.busy);
-    const buttonsDisabled = !pending || busy;
+    const [incompleteAck, setIncompleteAck] = useState(false);
+    const needsAck = action.requiresIncompleteAck === true;
+    const buttonsDisabled =
+        !pending || busy || (needsAck && !incompleteAck);
 
     return (
         <article className={`tool-action-card status-${action.status}`}>
@@ -56,6 +67,25 @@ export function ToolActionCard({
                 ))}
             </dl>
 
+            {action.originalsUntouched ? (
+                <p className="tool-action-card-summary">{action.originalsUntouched}</p>
+            ) : null}
+
+            {needsAck && pending ? (
+                <label className="tool-action-card-summary">
+                    <input
+                        type="checkbox"
+                        checked={incompleteAck}
+                        disabled={busy}
+                        onChange={(event) =>
+                            setIncompleteAck(event.target.checked)
+                        }
+                    />{" "}
+                    I understand this plan came from an incomplete scan and is
+                    not exhaustive.
+                </label>
+            ) : null}
+
             <footer className="tool-action-card-footer">
                 <p className="tool-action-card-status" aria-live="polite">
                     {statusLabel(action.status, busy)}
@@ -65,14 +95,20 @@ export function ToolActionCard({
                         type="button"
                         className="btn btn-primary"
                         disabled={buttonsDisabled}
-                        onClick={() => onApprove(action.id)}
+                        onClick={() =>
+                            onApprove(action.id, {
+                                acknowledgeIncompleteScan: needsAck
+                                    ? incompleteAck
+                                    : undefined,
+                            })
+                        }
                     >
                         Approve
                     </button>
                     <button
                         type="button"
                         className="btn btn-ghost"
-                        disabled={buttonsDisabled}
+                        disabled={!pending || busy}
                         onClick={() => onReject(action.id)}
                     >
                         Reject

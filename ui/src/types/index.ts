@@ -74,12 +74,84 @@ export interface ToolUseLine {
     summary: string;
 }
 
+export interface TransferPreview {
+    manifestId: string;
+    manifestHash: string;
+    destination: {
+        volumeId: string | null;
+        mount: string;
+        label?: string | null;
+        folderName: string;
+        fileSystem?: string | null;
+        freeBytes?: number | null;
+    };
+    entryCount: number;
+    estimatedTransferBytes: number;
+    estimatedFreeBytesRemaining: number | null;
+    complete: boolean;
+    incomplete: OffloadPlan["incomplete"];
+    requiresIncompleteAck: boolean;
+    originalsUntouched: string;
+    entries: Array<{
+        id: string;
+        sourcePath: string;
+        destinationPath: string;
+        sizeBytes: number;
+        safety: OffloadSafety;
+        concerns: string[];
+    }>;
+    dependencyWarnings: Array<{ entryId: string; text: string }>;
+}
+
 export interface PendingApproval {
     id: string;
     tool: string;
     permission: ToolPermission;
     reason: string;
     arguments: Record<string, unknown>;
+    requiresIncompleteAck?: boolean;
+    transferPreview?: TransferPreview | null;
+    standalone?: boolean;
+    manifestId?: string | null;
+    manifestHash?: string | null;
+    expiresAt?: string;
+}
+
+export interface StorageTransfer {
+    transferId: string;
+    status: string;
+    manifestId: string;
+    manifestHash: string;
+    entryCount: number;
+    completedFiles: number;
+    failedFiles: number;
+    skippedFiles: number;
+    bytesTransferred: number;
+    bytesTotal: number;
+    verifiedBytes: number;
+    currentFile: string | null;
+    bytesPerSecond: number;
+    estimatedSecondsRemaining: number | null;
+    destination: {
+        volumeId: string | null;
+        mount: string;
+        folderName: string;
+        offloadRoot: string;
+    };
+    completeScan: boolean;
+    message: string;
+    failureCode: string | null;
+    failureMessage: string | null;
+    startedAt: string;
+    finishedAt: string | null;
+    files: Array<{
+        entryId: string;
+        state: string;
+        sizeBytes: number;
+        relativePath: string;
+        failureCode: string | null;
+        failureMessage: string | null;
+    }>;
 }
 
 export interface ChatMessage {
@@ -151,6 +223,8 @@ export interface ToolAction {
     status: ToolActionStatus;
     permission?: string;
     busy?: boolean;
+    requiresIncompleteAck?: boolean;
+    originalsUntouched?: string | null;
 }
 
 export interface ActivityEntry {
@@ -169,10 +243,17 @@ export interface AgentActivityItem {
 }
 
 export interface AgentResponse {
-    status: AgentStatus;
+    status: AgentStatus | "transfer_started" | "transfer_failed";
     answer?: string;
     activity?: AgentActivityItem[];
     approval?: PendingApproval;
+    transfer?: {
+        transferId?: string;
+        status?: string;
+        [key: string]: unknown;
+    };
+    error?: string;
+    errorCode?: string;
 }
 
 export interface AppSettings {

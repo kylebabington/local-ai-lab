@@ -9,6 +9,7 @@ data/file-content-index.json
 data/conversation-transcript.json
 data/conversation-archive/
 data/conversation-memory-index.json
+data/transfer-journal/
 .tool-test-sandbox/
 .file-test-sandbox/
 .file-content-test-sandbox/

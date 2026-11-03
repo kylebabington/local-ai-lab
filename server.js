@@ -39,6 +39,7 @@ import { askProject } from "./lib/rag.js";
 
 import {
     approveById,
+    createStandaloneTransferApproval,
     listPendingApprovals,
     rejectById,
     runAgent,
@@ -96,6 +97,12 @@ import {
     revokeSessionGrant,
     runWithSession,
 } from "./lib/storage-session.js";
+import {
+    bootstrapTransferRuntime,
+    getPublicTransfer,
+    listPublicTransfers,
+    requestCancelTransfer,
+} from "./lib/tools/storage-transfer.js";
 import {
     describeStorageSession,
     grantScanFolder,
@@ -741,15 +748,19 @@ function handleApprovalsGet(response) {
 }
 
 
-async function handleApprovalDecision(response, id, action) {
+async function handleApprovalDecision(response, id, action, decision = {}) {
     try {
         const result =
-            action === "approve" ? await approveById(id) : await rejectById(id);
+            action === "approve"
+                ? await approveById(id, decision)
+                : await rejectById(id);
         sendJson(response, 200, result);
     } catch (error) {
         const message = userSafeMessage(error, "Approval update failed.");
         const status =
-            message.includes("Unknown or expired") ? 404 : errorStatus(error);
+            message.includes("Unknown or expired")
+                ? 404
+                : clientErrorStatus(error, errorStatus(error));
         console.error(`POST /api/approvals/${id}/${action} failed:`, error.message);
         sendError(response, status, message);
     }
@@ -1245,6 +1256,88 @@ async function handleStoragePlanSelectionPost(request, response, planId) {
 }
 
 
+async function handleStorageTransferRequestPost(request, response) {
+    let body;
+
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    const manifestId = typeof body.manifestId === "string" ? body.manifestId : "";
+    const reason =
+        typeof body.reason === "string" && body.reason.trim()
+            ? body.reason.trim()
+            : "Copy selected files to the external drive.";
+
+    try {
+        const approval = await createStandaloneTransferApproval({
+            manifestId,
+            reason,
+            authorizeHydrateCloudFiles: body.authorizeHydrateCloudFiles === true,
+        });
+        sendJson(response, 200, { approval });
+    } catch (error) {
+        console.error("POST /api/storage/transfers/request failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not request that transfer."),
+        );
+    }
+}
+
+
+async function handleStorageTransfersGet(response) {
+    try {
+        sendJson(response, 200, { transfers: listPublicTransfers() });
+    } catch (error) {
+        console.error("GET /api/storage/transfers failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error),
+            userSafeMessage(error, "Could not list transfers."),
+        );
+    }
+}
+
+
+async function handleStorageTransferGet(response, transferId) {
+    try {
+        const transfer = getPublicTransfer(transferId);
+        if (!transfer) {
+            sendError(response, 404, "Unknown transfer.");
+            return;
+        }
+        sendJson(response, 200, { transfer });
+    } catch (error) {
+        console.error("GET /api/storage/transfers/:id failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, 404),
+            userSafeMessage(error, "Could not load that transfer."),
+        );
+    }
+}
+
+
+async function handleStorageTransferCancelPost(response, transferId) {
+    try {
+        const transfer = requestCancelTransfer(transferId);
+        sendJson(response, 200, { transfer });
+    } catch (error) {
+        console.error("POST /api/storage/transfers/:id/cancel failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not cancel that transfer."),
+        );
+    }
+}
+
+
 async function routeRequest(request, response, url) {
     const pathname = url.pathname;
 
@@ -1452,20 +1545,23 @@ async function routeRequest(request, response, url) {
                 return;
             }
 
-            // Body is ignored. Approval/rejection uses the stored id only.
+            let decision = {};
             try {
-                await readJsonBody(request);
+                decision = await readJsonBody(request);
             } catch (error) {
                 if (error.status === 413) {
                     sendError(response, 413, error.message);
                     return;
                 }
+                // Empty body is fine for non-transfer approvals.
+                decision = {};
             }
 
             await handleApprovalDecision(
                 response,
                 decodeURIComponent(approvalMatch[1]),
                 approvalMatch[2],
+                decision,
             );
             return;
         }
@@ -1698,6 +1794,60 @@ async function routeRequest(request, response, url) {
             }
         }
 
+        if (pathname === "/api/storage/transfers/request") {
+            if (!requireMethod(request, response, ["POST"])) {
+                return;
+            }
+
+            await handleStorageTransferRequestPost(request, response);
+            return;
+        }
+
+        if (pathname === "/api/storage/transfers") {
+            if (!requireMethod(request, response, ["GET"])) {
+                return;
+            }
+
+            await handleStorageTransfersGet(response);
+            return;
+        }
+
+        {
+            const transferCancelMatch = pathname.match(
+                /^\/api\/storage\/transfers\/([^/]+)\/cancel$/,
+            );
+
+            if (transferCancelMatch) {
+                if (!requireMethod(request, response, ["POST"])) {
+                    return;
+                }
+
+                await handleStorageTransferCancelPost(
+                    response,
+                    decodeURIComponent(transferCancelMatch[1]),
+                );
+                return;
+            }
+        }
+
+        {
+            const transferGetMatch = pathname.match(
+                /^\/api\/storage\/transfers\/([^/]+)$/,
+            );
+
+            if (transferGetMatch) {
+                if (!requireMethod(request, response, ["GET"])) {
+                    return;
+                }
+
+                await handleStorageTransferGet(
+                    response,
+                    decodeURIComponent(transferGetMatch[1]),
+                );
+                return;
+            }
+        }
+
         sendError(response, 404, "Route not found.");
     } catch (error) {
         console.error("Unhandled request error:", error.message);
@@ -1711,6 +1861,7 @@ async function main() {
     await initializeConversationLifecycle();
     const transcriptInit = await initializeTranscript();
     await initializeConversationMemory();
+    await bootstrapTransferRuntime();
 
     const server = http.createServer(handleRequest);
 

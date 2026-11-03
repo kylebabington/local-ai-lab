@@ -150,13 +150,15 @@ Windows diagnostics never run a shell. Failed event-log queries are not treated 
 
 This is a third authority, separate from Computer filesystem roots and File Intelligence.
 
-### External-drive offload planning (read-only)
+### External-drive offload (plan + verified copy)
 
 `inspect_external_drives` lists volumes with stable identity when available and classifies them as internal, removable, external, or unknown (with uncertainty).
 
 `plan_storage_offload` proposes candidates from **granted** folders only. Safety labels are `likely_portable`, `review_required`, or `excluded` — never “safe to move.” Age and extension are not proof a file is unused. Destination paths preserve relative structure under `LocalAI-Offload\<folder>\...`.
 
-The Computer UI lets you review each file, select exact entries, and **lock** an immutable manifest bound to those entry IDs and the current session. Preparing or locking a plan does **not** free disk space. Copy/verify is not enabled yet.
+The Computer UI lets you review each file, select exact entries, and **lock** an immutable manifest bound to those entry IDs and the current session. `copy_and_verify_files` then requires user approval, copies without overwriting, verifies with SHA-256, and **never deletes sources**. Preparing, locking, or copying does **not** free internal disk space.
+
+Verify with `npm run verify:storage-transfer` (synthetic sandboxes; optional live external-drive case).
 
 ### Allowed roots
 

@@ -24,13 +24,19 @@ export async function listApprovals(): Promise<PendingApproval[]> {
     return data.approvals ?? [];
 }
 
-export async function approveAction(id: string): Promise<AgentResponse> {
+export async function approveAction(
+    id: string,
+    decision: {
+        acknowledgeIncompleteScan?: boolean;
+        authorizeHydrateCloudFiles?: boolean;
+    } = {},
+): Promise<AgentResponse> {
     return apiRequest<AgentResponse>(`/api/approvals/${encodeURIComponent(id)}/approve`, {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
         },
-        body: JSON.stringify({}),
+        body: JSON.stringify(decision),
     });
 }
 

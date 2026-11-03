@@ -1,17 +1,23 @@
 import { useEffect, useMemo, useState } from "react";
 
+import { approveAction, rejectAction } from "../services/agentService";
 import {
+    cancelStorageTransfer,
     createStoragePlan,
     fetchStorageDrives,
     fetchStoragePlan,
     fetchStoragePlans,
+    fetchStorageTransfer,
     lockStorageSelection,
     refreshStorageDrives,
+    requestStorageTransfer,
 } from "../services/storageService";
 import type {
     LockedManifest,
     OffloadPlan,
     OffloadPlanEntry,
+    PendingApproval,
+    StorageTransfer,
     StorageVolume,
 } from "../types";
 
@@ -62,6 +68,10 @@ export function StorageOffloadPanel({
     const [plan, setPlan] = useState<OffloadPlan | null>(null);
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [manifest, setManifest] = useState<LockedManifest | null>(null);
+    const [approval, setApproval] = useState<PendingApproval | null>(null);
+    const [incompleteAck, setIncompleteAck] = useState(false);
+    const [authorizeHydrate, setAuthorizeHydrate] = useState(false);
+    const [transfer, setTransfer] = useState<StorageTransfer | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -214,6 +224,9 @@ export function StorageOffloadPanel({
         try {
             const locked = await lockStorageSelection(plan.id, [...selected]);
             setManifest(locked);
+            setApproval(null);
+            setTransfer(null);
+            setIncompleteAck(false);
             const refreshed = await fetchStoragePlan(plan.id);
             setPlan(refreshed);
         } catch (caught) {
@@ -227,14 +240,138 @@ export function StorageOffloadPanel({
         }
     }
 
+    async function handleRequestTransfer() {
+        if (!manifest) {
+            return;
+        }
+
+        setBusy(true);
+        setError(null);
+
+        try {
+            const result = await requestStorageTransfer({
+                manifestId: manifest.manifestId,
+                reason: "Copy selected files to the external drive.",
+                authorizeHydrateCloudFiles: authorizeHydrate,
+            });
+            setApproval(result.approval);
+        } catch (caught) {
+            setError(
+                caught instanceof Error
+                    ? caught.message
+                    : "Could not request that transfer.",
+            );
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function handleApproveTransfer() {
+        if (!approval) {
+            return;
+        }
+
+        setBusy(true);
+        setError(null);
+
+        try {
+            const result = await approveAction(approval.id, {
+                acknowledgeIncompleteScan: incompleteAck,
+                authorizeHydrateCloudFiles: authorizeHydrate,
+            });
+            const transferId =
+                (result as { transfer?: { transferId?: string } }).transfer
+                    ?.transferId ?? null;
+            setApproval(null);
+            if (transferId) {
+                const live = await fetchStorageTransfer(transferId);
+                setTransfer(live);
+            }
+        } catch (caught) {
+            setError(
+                caught instanceof Error
+                    ? caught.message
+                    : "Could not approve that transfer.",
+            );
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function handleRejectTransfer() {
+        if (!approval) {
+            return;
+        }
+
+        setBusy(true);
+        setError(null);
+
+        try {
+            await rejectAction(approval.id);
+            setApproval(null);
+        } catch (caught) {
+            setError(
+                caught instanceof Error
+                    ? caught.message
+                    : "Could not reject that transfer.",
+            );
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function handleCancelTransfer() {
+        if (!transfer) {
+            return;
+        }
+
+        setBusy(true);
+        setError(null);
+
+        try {
+            const updated = await cancelStorageTransfer(transfer.transferId);
+            setTransfer(updated);
+        } catch (caught) {
+            setError(
+                caught instanceof Error
+                    ? caught.message
+                    : "Could not cancel that transfer.",
+            );
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    useEffect(() => {
+        if (
+            !transfer ||
+            transfer.status === "completed" ||
+            transfer.status === "failed" ||
+            transfer.status === "cancelled" ||
+            transfer.status === "interrupted"
+        ) {
+            return;
+        }
+
+        const timer = window.setInterval(() => {
+            void fetchStorageTransfer(transfer.transferId)
+                .then((live) => setTransfer(live))
+                .catch(() => {
+                    // keep last known state
+                });
+        }, 1000);
+
+        return () => window.clearInterval(timer);
+    }, [transfer]);
+
     return (
         <article className="storage-scan-panel" aria-label="Storage offload planning">
             <div className="storage-scan-header">
                 <div>
                     <h2>Offload planning</h2>
                     <p>
-                        Read-only. Review candidates, then lock an exact file
-                        selection. Copying is not enabled yet.
+                        Review candidates, lock an exact file selection, then
+                        approve a verified copy. Originals are never deleted.
                     </p>
                 </div>
                 <button
@@ -450,9 +587,122 @@ export function StorageOffloadPanel({
                         Manifest {manifest.manifestId.slice(0, 8)}… ·{" "}
                         {manifest.entryCount} files · estimated transfer{" "}
                         {formatBytes(manifest.estimatedTransferBytes)} · scan{" "}
-                        {manifest.complete ? "complete" : "partial"}. Copy is
-                        not available in this milestone.
+                        {manifest.complete ? "complete" : "partial"}.
                     </p>
+                    <p>
+                        Destination{" "}
+                        {`${manifest.destination.mount}LocalAI-Offload\\${manifest.destination.folderName}`}
+                        . Originals will remain untouched. Copying does not free
+                        internal storage.
+                    </p>
+
+                    <label>
+                        <input
+                            type="checkbox"
+                            checked={authorizeHydrate}
+                            disabled={busy || Boolean(transfer)}
+                            onChange={(event) =>
+                                setAuthorizeHydrate(event.target.checked)
+                            }
+                        />{" "}
+                        Authorize hydrating cloud-only placeholders if
+                        encountered (optional; skipped by default).
+                    </label>
+
+                    {!approval && !transfer ? (
+                        <button
+                            type="button"
+                            className="btn btn-primary"
+                            disabled={busy}
+                            onClick={() => void handleRequestTransfer()}
+                        >
+                            Request transfer approval
+                        </button>
+                    ) : null}
+
+                    {approval ? (
+                        <div className="storage-offload-actions">
+                            {approval.requiresIncompleteAck ? (
+                                <label>
+                                    <input
+                                        type="checkbox"
+                                        checked={incompleteAck}
+                                        disabled={busy}
+                                        onChange={(event) =>
+                                            setIncompleteAck(event.target.checked)
+                                        }
+                                    />{" "}
+                                    I understand this plan came from an incomplete
+                                    scan and is not exhaustive.
+                                </label>
+                            ) : null}
+                            <button
+                                type="button"
+                                className="btn btn-primary"
+                                disabled={
+                                    busy ||
+                                    (Boolean(approval.requiresIncompleteAck) &&
+                                        !incompleteAck)
+                                }
+                                onClick={() => void handleApproveTransfer()}
+                            >
+                                Approve transfer
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-ghost"
+                                disabled={busy}
+                                onClick={() => void handleRejectTransfer()}
+                            >
+                                Reject
+                            </button>
+                        </div>
+                    ) : null}
+                </div>
+            ) : null}
+
+            {transfer ? (
+                <div className="banner banner-info" role="status">
+                    <strong>Transfer {transfer.status}</strong>
+                    <p>
+                        {transfer.completedFiles}/{transfer.entryCount} verified ·{" "}
+                        {transfer.failedFiles} failed · {transfer.skippedFiles}{" "}
+                        skipped · {formatBytes(transfer.bytesTransferred)} /{" "}
+                        {formatBytes(transfer.bytesTotal)}
+                        {transfer.currentFile
+                            ? ` · current ${transfer.currentFile}`
+                            : ""}
+                    </p>
+                    {transfer.status === "running" ||
+                    transfer.status === "cancelling" ||
+                    transfer.status === "starting" ? (
+                        <button
+                            type="button"
+                            className="btn btn-ghost"
+                            disabled={busy || transfer.status === "cancelling"}
+                            onClick={() => void handleCancelTransfer()}
+                        >
+                            Cancel transfer
+                        </button>
+                    ) : null}
+                    {transfer.status === "completed" ? (
+                        <p>
+                            Files copied and verified. Originals remain on your
+                            computer. No internal storage has been freed. Verified{" "}
+                            {formatBytes(transfer.verifiedBytes)} to{" "}
+                            {transfer.destination.offloadRoot}.
+                        </p>
+                    ) : null}
+                    {transfer.status === "failed" ||
+                    transfer.status === "cancelled" ||
+                    transfer.status === "interrupted" ? (
+                        <p>
+                            Partial transfer warning: some files were not
+                            verified. Originals remain untouched. Temporary
+                            `.partial` files may remain on the destination for
+                            manual review.
+                        </p>
+                    ) : null}
                 </div>
             ) : null}
         </article>

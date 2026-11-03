@@ -149,8 +149,8 @@ async function testRegistry() {
         "run_shell must stay blocked",
     );
     assert(
-        !listed.some((item) => item.name === "copy_and_verify_files"),
-        "copy must not exist yet",
+        listed.some((item) => item.name === "copy_and_verify_files"),
+        "copy_and_verify_files should be registered",
     );
 
     validateToolArguments("inspect_external_drives", {});
@@ -162,7 +162,7 @@ async function testRegistry() {
         "destinationVolumeId",
     );
 
-    pass("registry", "offload tools read-only; copy not registered; run_shell blocked");
+    pass("registry", "offload tools read-only; copy registered; run_shell blocked");
 }
 
 
@@ -376,7 +376,7 @@ async function testSelectionLock() {
         const locked = lockManifestFromSelection(planned.planId, ids);
         assert(locked.manifestId, "manifest id");
         assert(locked.hash?.length === 64, "sha256 hash");
-        assert(locked.copyAvailable === false, "copy not available");
+        assert(locked.copyAvailable === true, "copy should be available after lock");
         assert(
             locked.complete === planned.complete,
             "manifest must preserve plan completeness",

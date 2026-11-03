@@ -2,9 +2,11 @@ import { apiRequest } from "./http";
 import type {
     LockedManifest,
     OffloadPlan,
+    PendingApproval,
     StorageDriveSnapshot,
     StorageGrant,
     StorageSession,
+    StorageTransfer,
 } from "../types";
 
 export async function fetchStorageSession(): Promise<StorageSession> {
@@ -106,4 +108,53 @@ export async function lockStorageSelection(
             body: JSON.stringify({ entryIds }),
         },
     );
+}
+
+export async function requestStorageTransfer(body: {
+    manifestId: string;
+    reason?: string;
+    authorizeHydrateCloudFiles?: boolean;
+}): Promise<{ approval: PendingApproval }> {
+    return apiRequest<{ approval: PendingApproval }>(
+        "/api/storage/transfers/request",
+        {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+        },
+    );
+}
+
+export async function fetchStorageTransfers(): Promise<StorageTransfer[]> {
+    const data = await apiRequest<{ transfers: StorageTransfer[] }>(
+        "/api/storage/transfers",
+    );
+    return data.transfers ?? [];
+}
+
+export async function fetchStorageTransfer(
+    transferId: string,
+): Promise<StorageTransfer> {
+    const data = await apiRequest<{ transfer: StorageTransfer }>(
+        `/api/storage/transfers/${encodeURIComponent(transferId)}`,
+    );
+    return data.transfer;
+}
+
+export async function cancelStorageTransfer(
+    transferId: string,
+): Promise<StorageTransfer> {
+    const data = await apiRequest<{ transfer: StorageTransfer }>(
+        `/api/storage/transfers/${encodeURIComponent(transferId)}/cancel`,
+        {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({}),
+        },
+    );
+    return data.transfer;
 }

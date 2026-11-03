@@ -283,7 +283,13 @@ async function testOriginGuard() {
         headers: { origin: "http://localhost:5173" },
         socket: { remoteAddress: "127.0.0.1" },
     });
-    assert(local === null, "localhost origin blocked");
+    assert(local === null, "trusted Vite origin blocked");
+
+    const randomLocal = forbiddenCrossOriginMessage({
+        headers: { origin: "http://localhost:9999" },
+        socket: { remoteAddress: "127.0.0.1" },
+    });
+    assert(randomLocal, "arbitrary localhost port must not be trusted");
 
     const script = forbiddenCrossOriginMessage({
         headers: {},
@@ -297,7 +303,7 @@ async function testOriginGuard() {
     });
     assert(remote, "non-loopback missing Origin allowed");
 
-    pass("origin guard", "cross-origin mutating requests rejected");
+    pass("origin guard", "only trusted app origins accepted");
 }
 
 

@@ -369,7 +369,14 @@ export function ChatPage() {
         }
     }
 
-    async function handleApproval(id: string, decision: "approve" | "reject") {
+    async function handleApproval(
+        id: string,
+        decision: "approve" | "reject",
+        approveDecision: {
+            acknowledgeIncompleteScan?: boolean;
+            authorizeHydrateCloudFiles?: boolean;
+        } = {},
+    ) {
         setApprovalBusyId(id);
         setError(null);
 
@@ -403,7 +410,7 @@ export function ChatPage() {
         try {
             const response =
                 decision === "approve"
-                    ? await approveAction(id)
+                    ? await approveAction(id, approveDecision)
                     : await rejectAction(id);
             setScanRefresh((value) => value + 1);
 
@@ -537,8 +544,12 @@ export function ChatPage() {
                             key={message.id}
                             message={message}
                             approvalBusy={approvalBusyId === message.approval?.id}
-                            onApprove={(approvalId) =>
-                                void handleApproval(approvalId, "approve")
+                            onApprove={(approvalId, approveDecision) =>
+                                void handleApproval(
+                                    approvalId,
+                                    "approve",
+                                    approveDecision,
+                                )
                             }
                             onReject={(approvalId) =>
                                 void handleApproval(approvalId, "reject")

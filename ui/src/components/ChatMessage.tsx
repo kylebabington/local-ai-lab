@@ -11,7 +11,13 @@ import type {
 interface ChatMessageItemProps {
     message: ChatMessage;
     approvalBusy?: boolean;
-    onApprove?: (id: string) => void;
+    onApprove?: (
+        id: string,
+        decision?: {
+            acknowledgeIncompleteScan?: boolean;
+            authorizeHydrateCloudFiles?: boolean;
+        },
+    ) => void;
     onReject?: (id: string) => void;
 }
 
@@ -69,6 +75,28 @@ function approvalToAction(
         });
     }
 
+    if (approval.transferPreview) {
+        const preview = approval.transferPreview;
+        details.push(
+            {
+                label: "Destination",
+                value: `${preview.destination.mount}LocalAI-Offload\\${preview.destination.folderName}`,
+            },
+            {
+                label: "Files",
+                value: String(preview.entryCount),
+            },
+            {
+                label: "Estimated transfer",
+                value: `${preview.estimatedTransferBytes} bytes`,
+            },
+            {
+                label: "Scan",
+                value: preview.complete ? "complete" : "partial",
+            },
+        );
+    }
+
     return {
         id: approval.id,
         title: approval.tool,
@@ -80,6 +108,8 @@ function approvalToAction(
         status: status ?? "pending",
         permission: approval.permission,
         busy,
+        requiresIncompleteAck: approval.requiresIncompleteAck === true,
+        originalsUntouched: approval.transferPreview?.originalsUntouched ?? null,
     };
 }
 
