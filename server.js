@@ -39,6 +39,7 @@ import { askProject } from "./lib/rag.js";
 
 import {
     approveById,
+    createStandaloneRemovalApproval,
     createStandaloneTransferApproval,
     listPendingApprovals,
     rejectById,
@@ -110,6 +111,14 @@ import {
     requestCancelReclaimJob,
     startReclaimReview,
 } from "./lib/tools/storage-reclaim.js";
+import {
+    bootstrapRemovalRuntime,
+    getPublicReclaimManifest,
+    getPublicRemovalJob,
+    listPublicReclaimManifests,
+    lockReclaimSelection,
+    requestCancelRemovalJob,
+} from "./lib/tools/storage-removal.js";
 import {
     describeStorageSession,
     grantScanFolder,
@@ -1429,6 +1438,134 @@ async function handleStorageReclaimJobCancelPost(response, jobId) {
 }
 
 
+async function handleStorageReclaimSelectionPost(request, response, jobId) {
+    let body;
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    try {
+        const manifest = lockReclaimSelection(jobId, body.entryIds);
+        sendJson(response, 200, { manifest });
+    } catch (error) {
+        console.error(
+            "POST /api/storage/reclaim-jobs/:id/selection failed:",
+            error.message,
+        );
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not lock that reclaim selection."),
+        );
+    }
+}
+
+
+async function handleStorageRemovalRequestPost(request, response) {
+    let body;
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    try {
+        const approval = await createStandaloneRemovalApproval({
+            reclaimManifestId: body.reclaimManifestId,
+            reason:
+                typeof body.reason === "string" && body.reason.trim()
+                    ? body.reason.trim()
+                    : "Move selected verified originals to the Recycle Bin.",
+        });
+        sendJson(response, 200, { approval });
+    } catch (error) {
+        console.error(
+            "POST /api/storage/removals/request failed:",
+            error.message,
+        );
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not request that removal."),
+        );
+    }
+}
+
+
+async function handleStorageRemovalGet(response, removalId) {
+    try {
+        const removal = getPublicRemovalJob(removalId);
+        if (!removal) {
+            sendError(response, 404, "Unknown removal job.");
+            return;
+        }
+        sendJson(response, 200, { removal });
+    } catch (error) {
+        console.error("GET /api/storage/removals/:id failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, 404),
+            userSafeMessage(error, "Could not load that removal job."),
+        );
+    }
+}
+
+
+async function handleStorageRemovalCancelPost(response, removalId) {
+    try {
+        const removal = requestCancelRemovalJob(removalId);
+        sendJson(response, 200, { removal });
+    } catch (error) {
+        console.error(
+            "POST /api/storage/removals/:id/cancel failed:",
+            error.message,
+        );
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not cancel that removal."),
+        );
+    }
+}
+
+
+async function handleStorageReclaimManifestsGet(response) {
+    try {
+        sendJson(response, 200, {
+            manifests: listPublicReclaimManifests(),
+        });
+    } catch (error) {
+        sendError(
+            response,
+            clientErrorStatus(error),
+            userSafeMessage(error, "Could not list reclaim manifests."),
+        );
+    }
+}
+
+
+async function handleStorageReclaimManifestGet(response, manifestId) {
+    try {
+        const manifest = getPublicReclaimManifest(manifestId);
+        if (!manifest) {
+            sendError(response, 404, "Unknown reclaim manifest.");
+            return;
+        }
+        sendJson(response, 200, { manifest });
+    } catch (error) {
+        sendError(
+            response,
+            clientErrorStatus(error, 404),
+            userSafeMessage(error, "Could not load that reclaim manifest."),
+        );
+    }
+}
+
+
 async function routeRequest(request, response, url) {
     const pathname = url.pathname;
 
@@ -1986,6 +2123,25 @@ async function routeRequest(request, response, url) {
         }
 
         {
+            const reclaimSelectionMatch = pathname.match(
+                /^\/api\/storage\/reclaim-jobs\/([^/]+)\/selection$/,
+            );
+
+            if (reclaimSelectionMatch) {
+                if (!requireMethod(request, response, ["POST"])) {
+                    return;
+                }
+
+                await handleStorageReclaimSelectionPost(
+                    request,
+                    response,
+                    decodeURIComponent(reclaimSelectionMatch[1]),
+                );
+                return;
+            }
+        }
+
+        {
             const reclaimJobMatch = pathname.match(
                 /^\/api\/storage\/reclaim-jobs\/([^/]+)$/,
             );
@@ -1998,6 +2154,78 @@ async function routeRequest(request, response, url) {
                 await handleStorageReclaimJobGet(
                     response,
                     decodeURIComponent(reclaimJobMatch[1]),
+                );
+                return;
+            }
+        }
+
+        if (pathname === "/api/storage/reclaim-manifests") {
+            if (!requireMethod(request, response, ["GET"])) {
+                return;
+            }
+
+            await handleStorageReclaimManifestsGet(response);
+            return;
+        }
+
+        {
+            const reclaimManifestMatch = pathname.match(
+                /^\/api\/storage\/reclaim-manifests\/([^/]+)$/,
+            );
+
+            if (reclaimManifestMatch) {
+                if (!requireMethod(request, response, ["GET"])) {
+                    return;
+                }
+
+                await handleStorageReclaimManifestGet(
+                    response,
+                    decodeURIComponent(reclaimManifestMatch[1]),
+                );
+                return;
+            }
+        }
+
+        if (pathname === "/api/storage/removals/request") {
+            if (!requireMethod(request, response, ["POST"])) {
+                return;
+            }
+
+            await handleStorageRemovalRequestPost(request, response);
+            return;
+        }
+
+        {
+            const removalCancelMatch = pathname.match(
+                /^\/api\/storage\/removals\/([^/]+)\/cancel$/,
+            );
+
+            if (removalCancelMatch) {
+                if (!requireMethod(request, response, ["POST"])) {
+                    return;
+                }
+
+                await handleStorageRemovalCancelPost(
+                    response,
+                    decodeURIComponent(removalCancelMatch[1]),
+                );
+                return;
+            }
+        }
+
+        {
+            const removalGetMatch = pathname.match(
+                /^\/api\/storage\/removals\/([^/]+)$/,
+            );
+
+            if (removalGetMatch) {
+                if (!requireMethod(request, response, ["GET"])) {
+                    return;
+                }
+
+                await handleStorageRemovalGet(
+                    response,
+                    decodeURIComponent(removalGetMatch[1]),
                 );
                 return;
             }
@@ -2018,6 +2246,7 @@ async function main() {
     await initializeConversationMemory();
     await bootstrapTransferRuntime();
     bootstrapReclaimRuntime();
+    await bootstrapRemovalRuntime();
 
     const server = http.createServer(handleRequest);
 

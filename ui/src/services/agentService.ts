@@ -29,6 +29,7 @@ export async function approveAction(
     decision: {
         acknowledgeIncompleteScan?: boolean;
         authorizeHydrateCloudFiles?: boolean;
+        acknowledgeRemovalRisk?: boolean;
     } = {},
 ): Promise<AgentResponse> {
     return apiRequest<AgentResponse>(`/api/approvals/${encodeURIComponent(id)}/approve`, {

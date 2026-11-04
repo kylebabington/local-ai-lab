@@ -10,6 +10,10 @@ data/conversation-transcript.json
 data/conversation-archive/
 data/conversation-memory-index.json
 data/transfer-journal/
+data/removal-journal/
+native/windows-recycle/windows-recycle.exe
+native/windows-recycle/windows-recycle.obj
+native/windows-recycle/windows-recycle.provenance.json
 .tool-test-sandbox/
 .file-test-sandbox/
 .file-content-test-sandbox/

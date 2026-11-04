@@ -137,7 +137,7 @@ Computer mode can inspect files inside allowed roots and propose a few filesyste
 ### Permission classes
 
 * **Read (auto):** `list_directory`, `get_file_info`, `search_files`, `read_text_file`, `search_file_index`, `get_indexed_file`, `inspect_processes`, `inspect_event_log`, `inspect_system_health`, `inspect_services`, `inspect_network`, `inspect_resource_consumers`, `inspect_disk_usage`, `inspect_external_drives`, `plan_storage_offload`, `inspect_reclaim_candidates`
-* **Approval required:** `create_directory`, `copy_file`, `move_file`, `rename_file`, `request_storage_scan`, `copy_and_verify_files` — shown in the UI until you approve or reject. Approve/reject send only the stored approval id, not a new path from the browser
+* **Approval required:** `create_directory`, `copy_file`, `move_file`, `rename_file`, `request_storage_scan`, `copy_and_verify_files`, `request_reclaim_removal` — shown in the UI until you approve or reject. Approve/reject send only the stored approval id, not a new path from the browser
 * **High risk (not enabled):** delete, overwrite, shell, and install. They appear on the Tools page as blocked labels only
 
 Destinations that already exist are refused. Symbolic links are refused, including a symlink in the middle of a path.
@@ -174,21 +174,23 @@ After a transfer, `inspect_reclaim_candidates` independently re-checks journaled
 
 **Classification** separates copy/source/destination integrity, source authorization, dependency confidence, and cloud/reparse safety from removal-review eligibility (`eligible_for_review`, `requires_manual_review`, `excluded`, `verification_failed`). Uncertain dependencies do not collapse into integrity failure. Cloud placeholders are never silently hydrated. Verification runs as a bounded, cancellable, one-file-at-a-time job with progress; hashes and full file lists stay out of the model context.
 
-The Computer **Review Verified Originals** panel shows counts, estimates, and per-file details. Logical size is never presented as guaranteed recoverable disk space. `bytesActuallyReclaimed` is always **0** in D1. There is no Delete, Remove, or Recycle action.
+The Computer **Review Verified Originals** panel shows counts, estimates, and per-file details. Logical size is never presented as guaranteed recoverable disk space. D1 analysis never reclaims bytes. D2 may offer synthetic-only Recycle Bin removal after an exact locked selection and separate approval.
 
 Verify with `npm run verify:storage-reclaim` (mocked/synthetic results reported separately from optional live Windows cases).
 
-### Milestone D2 design (not implemented)
+### Verified source removal (Milestone D2, synthetic-only)
 
-Future source removal would be a **separate** approval from copy:
+`request_reclaim_removal` is a separate approval from copy. The Computer panel locks an exact reclaim selection (`reclaimManifestId`) — nothing is auto-selected. Arguments are only that id and a reason (never filesystem paths).
 
-* Exact per-file selection from a freshly re-verified reclaim result / short-lived reclaim manifest (no model-supplied paths; no generic delete tool for Ollama).
-* Fresh verification immediately before each removal; failed hashes, missing destinations, revoked grants, protected paths, and changed volume identities cannot be overridden by “manual confirmation.”
-* Preferred disposal: Windows Recycle Bin via a pinned native helper using `IFileOperation` with `FOFX_RECYCLEONDELETE` / `FOFX_ADDUNDORECORD` (STA COM). Refuse and show manual instructions when Recycle Bin cannot be guaranteed (subst/network/some removable volumes).
-* Clear UI distinction between Recycle Bin and permanent deletion; irreversible-action warnings; measure actual recovered space; full audit history.
-* Manual-review workflow for copies that verify but whose dependencies remain uncertain — separately approved, never a bypass for integrity failures.
+**Synthetic-only gate:** removal runs only for sources inside roots **explicitly registered** by the verification harness through an in-process test authority. Directory-name patterns do not authorize removal. Ordinary HTTP APIs and model tools cannot register roots. Production defaults to zero authorized roots.
 
-D2 is documentation only until separately approved. D1 does not delete, recycle, or modify originals.
+**Recycle proof:** a pinned helper (`native/windows-recycle/`, built with `npm run build:windows-recycle`) uses `IFileOperation` with `FOFX_RECYCLEONDELETE`. Before any removal job, a sacrificial probe must prove recycle-only behavior for that synthetic root. `PreDeleteItem` requires `TSF_DELETE_RECYCLE_IF_POSSIBLE` (0x80); `recycled: true` requires `PostDeleteItem` evidence including a non-null `psiNewlyCreated` Recycle Bin item plus `PerformOperations` / `GetAnyOperationsAborted` checks. Permanent deletion evidence disables further removals. No `fs.unlink` / `Remove-Item` fallback. subst/UNC volumes are refused.
+
+**TOCTOU:** Node and the helper both re-check identity and synthetic-root boundaries; residual replacement races between final checks and helper execution remain — real user-file removal stays disabled.
+
+Verify with `npm run verify:storage-removal` (mocked, helper-build, live-recycle, and live-restore reported separately).
+
+**Not enabled:** real Documents/Downloads/media/project files, permanent deletion, emptying the Recycle Bin, generic delete tools.
 
 ### Allowed roots
 

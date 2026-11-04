@@ -4,6 +4,8 @@ import type {
     OffloadPlan,
     PendingApproval,
     ReclaimJob,
+    ReclaimManifest,
+    RemovalJob,
     StorageDriveSnapshot,
     StorageGrant,
     StorageSession,
@@ -196,4 +198,58 @@ export async function cancelStorageReclaimJob(jobId: string): Promise<ReclaimJob
         },
     );
     return data.job;
+}
+
+export async function lockReclaimSelection(
+    jobId: string,
+    entryIds: string[],
+): Promise<ReclaimManifest> {
+    const data = await apiRequest<{ manifest: ReclaimManifest }>(
+        `/api/storage/reclaim-jobs/${encodeURIComponent(jobId)}/selection`,
+        {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ entryIds }),
+        },
+    );
+    return data.manifest;
+}
+
+export async function requestStorageRemoval(body: {
+    reclaimManifestId: string;
+    reason?: string;
+}): Promise<{ approval: PendingApproval }> {
+    return apiRequest<{ approval: PendingApproval }>(
+        "/api/storage/removals/request",
+        {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+        },
+    );
+}
+
+export async function fetchStorageRemoval(removalId: string): Promise<RemovalJob> {
+    const data = await apiRequest<{ removal: RemovalJob }>(
+        `/api/storage/removals/${encodeURIComponent(removalId)}`,
+    );
+    return data.removal;
+}
+
+export async function cancelStorageRemoval(removalId: string): Promise<RemovalJob> {
+    const data = await apiRequest<{ removal: RemovalJob }>(
+        `/api/storage/removals/${encodeURIComponent(removalId)}/cancel`,
+        {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({}),
+        },
+    );
+    return data.removal;
 }

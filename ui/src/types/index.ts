@@ -110,10 +110,31 @@ export interface PendingApproval {
     reason: string;
     arguments: Record<string, unknown>;
     requiresIncompleteAck?: boolean;
+    requiresRemovalAck?: boolean;
     transferPreview?: TransferPreview | null;
+    removalPreview?: {
+        reclaimManifestId: string;
+        manifestHash: string;
+        transferId: string;
+        entryCount: number;
+        logicalBytesSelected: number;
+        disposal: string;
+        scope: string;
+        permanentDelete: boolean;
+        originalsWillBeRemoved: boolean;
+        warning: string;
+        entries: Array<{
+            entryId: string;
+            sourcePath: string;
+            destinationPath: string;
+            sizeBytes: number;
+        }>;
+    } | null;
     standalone?: boolean;
     manifestId?: string | null;
     manifestHash?: string | null;
+    reclaimManifestId?: string | null;
+    reclaimManifestHash?: string | null;
     expiresAt?: string;
 }
 
@@ -186,6 +207,8 @@ export interface ReclaimCandidate {
     journalState: string;
     sourceHashVerified: boolean;
     destinationHashVerified: boolean;
+    syntheticRemovalAuthorized?: boolean;
+    lastVerifiedAt?: string | null;
 }
 
 export interface ReclaimJob {
@@ -231,6 +254,68 @@ export interface ReclaimJob {
     interpretationLimits: string[];
     candidates: ReclaimCandidate[];
     bytesActuallyReclaimed: number;
+}
+
+export interface ReclaimManifest {
+    reclaimManifestId: string;
+    hash: string;
+    reclaimJobId: string;
+    transferId: string;
+    entryCount: number;
+    logicalBytesSelected: number;
+    disposal: "recycle_bin";
+    scope: string;
+    invalidated: boolean;
+    invalidReason: string | null;
+    consumed: boolean;
+    entries: Array<{
+        entryId: string;
+        sourcePath: string;
+        destinationPath: string;
+        sizeBytes: number;
+        eligibility: ReclaimEligibility;
+    }>;
+    warnings: string[];
+    createdAt: string;
+    message: string;
+}
+
+export interface RemovalJob {
+    removalId: string;
+    status: string;
+    transferId: string;
+    reclaimManifestId: string;
+    scope: string;
+    metrics: {
+        filesSelected: number;
+        logicalBytesSelected: number;
+        filesRecycled: number;
+        filesFailed: number;
+        filesIndeterminate: number;
+        filesAborted: number;
+        filesPermanentlyRemoved: number;
+        filesRemovedFromSource: number;
+        logicalBytesRecycled: number;
+        freeBytesBefore: number | null;
+        freeBytesAfter: number | null;
+        freeBytesDelta: number | null;
+        notes: string[];
+    };
+    files: Array<{
+        entryId: string;
+        sourcePath: string;
+        destinationPath: string;
+        sizeBytes: number;
+        outcome: string;
+        detail: string | null;
+        recyclePath: string | null;
+    }>;
+    failureCode: string | null;
+    failureMessage: string | null;
+    criticalFailure: boolean;
+    startedAt: string;
+    finishedAt: string | null;
+    message: string;
 }
 
 export interface ChatMessage {

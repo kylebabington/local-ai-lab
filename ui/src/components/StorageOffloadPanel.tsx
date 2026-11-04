@@ -3,15 +3,19 @@ import { useEffect, useMemo, useState } from "react";
 import { approveAction, rejectAction } from "../services/agentService";
 import {
     cancelStorageReclaimJob,
+    cancelStorageRemoval,
     cancelStorageTransfer,
     createStoragePlan,
     fetchStorageDrives,
     fetchStoragePlan,
     fetchStoragePlans,
     fetchStorageReclaimJob,
+    fetchStorageRemoval,
     fetchStorageTransfer,
+    lockReclaimSelection,
     lockStorageSelection,
     refreshStorageDrives,
+    requestStorageRemoval,
     requestStorageTransfer,
     startStorageReclaimReview,
 } from "../services/storageService";
@@ -22,6 +26,8 @@ import type {
     PendingApproval,
     ReclaimCandidate,
     ReclaimJob,
+    ReclaimManifest,
+    RemovalJob,
     StorageTransfer,
     StorageVolume,
 } from "../types";
@@ -91,6 +97,15 @@ export function StorageOffloadPanel({
     const [authorizeHydrate, setAuthorizeHydrate] = useState(false);
     const [transfer, setTransfer] = useState<StorageTransfer | null>(null);
     const [reclaimJob, setReclaimJob] = useState<ReclaimJob | null>(null);
+    const [reclaimSelected, setReclaimSelected] = useState<Set<string>>(
+        new Set(),
+    );
+    const [reclaimManifest, setReclaimManifest] =
+        useState<ReclaimManifest | null>(null);
+    const [removalApproval, setRemovalApproval] =
+        useState<PendingApproval | null>(null);
+    const [removalAck, setRemovalAck] = useState(false);
+    const [removalJob, setRemovalJob] = useState<RemovalJob | null>(null);
     const [expandedEntryId, setExpandedEntryId] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -370,6 +385,11 @@ export function StorageOffloadPanel({
         setBusy(true);
         setError(null);
         setExpandedEntryId(null);
+        setReclaimSelected(new Set());
+        setReclaimManifest(null);
+        setRemovalApproval(null);
+        setRemovalAck(false);
+        setRemovalJob(null);
 
         try {
             const job = await startStorageReclaimReview(transfer.transferId);
@@ -379,6 +399,118 @@ export function StorageOffloadPanel({
                 caught instanceof Error
                     ? caught.message
                     : "Could not start reclaim review.",
+            );
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    function toggleReclaimEntry(entryId: string, eligible: boolean) {
+        if (!eligible) {
+            return;
+        }
+        setReclaimSelected((current) => {
+            const next = new Set(current);
+            if (next.has(entryId)) {
+                next.delete(entryId);
+            } else {
+                next.add(entryId);
+            }
+            return next;
+        });
+    }
+
+    async function handleLockReclaimSelection() {
+        if (!reclaimJob) {
+            return;
+        }
+        setBusy(true);
+        setError(null);
+        try {
+            const locked = await lockReclaimSelection(reclaimJob.jobId, [
+                ...reclaimSelected,
+            ]);
+            setReclaimManifest(locked);
+            setRemovalApproval(null);
+            setRemovalAck(false);
+        } catch (caught) {
+            setError(
+                caught instanceof Error
+                    ? caught.message
+                    : "Could not lock reclaim selection.",
+            );
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function handleRequestRemoval() {
+        if (!reclaimManifest) {
+            return;
+        }
+        setBusy(true);
+        setError(null);
+        try {
+            const result = await requestStorageRemoval({
+                reclaimManifestId: reclaimManifest.reclaimManifestId,
+                reason: "Move selected synthetic verified originals to the Recycle Bin.",
+            });
+            setRemovalApproval(result.approval);
+        } catch (caught) {
+            setError(
+                caught instanceof Error
+                    ? caught.message
+                    : "Could not request removal approval.",
+            );
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function handleApproveRemoval() {
+        if (!removalApproval) {
+            return;
+        }
+        setBusy(true);
+        setError(null);
+        try {
+            const result = await approveAction(removalApproval.id, {
+                acknowledgeRemovalRisk: removalAck,
+            });
+            setRemovalApproval(null);
+            const removalId =
+                (result as { removal?: { removalId?: string } }).removal
+                    ?.removalId ?? null;
+            if (removalId) {
+                const live = await fetchStorageRemoval(removalId);
+                setRemovalJob(live);
+            }
+        } catch (caught) {
+            setError(
+                caught instanceof Error
+                    ? caught.message
+                    : "Could not approve removal.",
+            );
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function handleRejectRemoval() {
+        if (!removalApproval) {
+            return;
+        }
+        setBusy(true);
+        setError(null);
+        try {
+            await rejectAction(removalApproval.id);
+            setRemovalApproval(null);
+            setRemovalAck(false);
+        } catch (caught) {
+            setError(
+                caught instanceof Error
+                    ? caught.message
+                    : "Could not reject removal.",
             );
         } finally {
             setBusy(false);
@@ -449,6 +581,51 @@ export function StorageOffloadPanel({
         }, 1000);
 
         return () => window.clearInterval(timer);
+    }, [reclaimJob]);
+
+    useEffect(() => {
+        if (
+            !removalJob ||
+            removalJob.status === "completed" ||
+            removalJob.status === "failed" ||
+            removalJob.status === "cancelled"
+        ) {
+            return;
+        }
+
+        const timer = window.setInterval(() => {
+            void fetchStorageRemoval(removalJob.removalId)
+                .then((live) => setRemovalJob(live))
+                .catch(() => {
+                    // keep last known state
+                });
+        }, 1000);
+
+        return () => window.clearInterval(timer);
+    }, [removalJob]);
+
+    const reclaimSelectedBytes = useMemo(() => {
+        if (!reclaimJob) {
+            return 0;
+        }
+        return reclaimJob.candidates
+            .filter(
+                (candidate) =>
+                    reclaimSelected.has(candidate.entryId) &&
+                    candidate.syntheticRemovalAuthorized === true,
+            )
+            .reduce((sum, candidate) => sum + (candidate.sizeBytes ?? 0), 0);
+    }, [reclaimJob, reclaimSelected]);
+
+    const hasSyntheticRemovalCandidates = useMemo(() => {
+        if (!reclaimJob) {
+            return false;
+        }
+        return reclaimJob.candidates.some(
+            (candidate) =>
+                candidate.eligibility === "eligible_for_review" &&
+                candidate.syntheticRemovalAuthorized === true,
+        );
     }, [reclaimJob]);
 
     return (
@@ -885,9 +1062,51 @@ export function StorageOffloadPanel({
 
                     {reclaimJob.candidates.length > 0 ? (
                         <div className="storage-offload-table-wrap">
+                            <p>
+                                Automated Recycle Bin removal is available only for
+                                files inside explicitly registered synthetic test
+                                roots. Real user files are never auto-removed —
+                                use guided manual reclamation instead.
+                            </p>
+                            <p>
+                                Selected synthetic logical bytes:{" "}
+                                {formatBytes(reclaimSelectedBytes)}
+                            </p>
+                            {hasSyntheticRemovalCandidates ? (
+                                <div className="storage-offload-actions">
+                                    <button
+                                        type="button"
+                                        className="btn btn-ghost"
+                                        disabled={busy}
+                                        onClick={() =>
+                                            setReclaimSelected(new Set())
+                                        }
+                                    >
+                                        Clear selection
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="btn btn-primary"
+                                        disabled={
+                                            busy || reclaimSelected.size === 0
+                                        }
+                                        onClick={() =>
+                                            void handleLockReclaimSelection()
+                                        }
+                                    >
+                                        Lock synthetic reclaim selection
+                                    </button>
+                                </div>
+                            ) : (
+                                <p>
+                                    No synthetic-authorized files in this review.
+                                    Automated Recycle Bin removal is unavailable.
+                                </p>
+                            )}
                             <table className="storage-offload-table">
                                 <thead>
                                     <tr>
+                                        <th scope="col">Select</th>
                                         <th scope="col">Original</th>
                                         <th scope="col">External backup</th>
                                         <th scope="col">Size</th>
@@ -897,8 +1116,30 @@ export function StorageOffloadPanel({
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {reclaimJob.candidates.map((candidate) => (
+                                    {reclaimJob.candidates.map((candidate) => {
+                                        const eligible =
+                                            candidate.eligibility ===
+                                                "eligible_for_review" &&
+                                            candidate.syntheticRemovalAuthorized ===
+                                                true;
+                                        return (
                                         <tr key={candidate.entryId}>
+                                            <td>
+                                                <input
+                                                    type="checkbox"
+                                                    checked={reclaimSelected.has(
+                                                        candidate.entryId,
+                                                    )}
+                                                    disabled={!eligible || busy}
+                                                    onChange={() =>
+                                                        toggleReclaimEntry(
+                                                            candidate.entryId,
+                                                            eligible,
+                                                        )
+                                                    }
+                                                    aria-label={`Select ${candidate.sourcePath}`}
+                                                />
+                                            </td>
                                             <td>
                                                 <code>{candidate.sourcePath}</code>
                                             </td>
@@ -1026,9 +1267,132 @@ export function StorageOffloadPanel({
                                                 ) : null}
                                             </td>
                                         </tr>
-                                    ))}
+                                        );
+                                    })}
                                 </tbody>
                             </table>
+                        </div>
+                    ) : null}
+
+                    {reclaimManifest ? (
+                        <div className="banner banner-info" role="status">
+                            <strong>Reclaim selection locked</strong>
+                            <p>
+                                {reclaimManifest.entryCount} file(s) ·{" "}
+                                {formatBytes(reclaimManifest.logicalBytesSelected)}{" "}
+                                · disposal Recycle Bin · scope{" "}
+                                {reclaimManifest.scope}. External copies remain.
+                                Permanent deletion is unavailable.
+                            </p>
+                            {!removalApproval && !removalJob ? (
+                                <button
+                                    type="button"
+                                    className="btn btn-primary"
+                                    disabled={busy || reclaimManifest.consumed}
+                                    onClick={() => void handleRequestRemoval()}
+                                >
+                                    Request removal approval
+                                </button>
+                            ) : null}
+                            {removalApproval ? (
+                                <div className="storage-offload-actions">
+                                    <label>
+                                        <input
+                                            type="checkbox"
+                                            checked={removalAck}
+                                            disabled={busy}
+                                            onChange={(event) =>
+                                                setRemovalAck(
+                                                    event.target.checked,
+                                                )
+                                            }
+                                        />{" "}
+                                        I understand selected originals will leave
+                                        their paths and move to the Recycle Bin if
+                                        recycling can be proven. This does not
+                                        permanently delete files and does not empty
+                                        the Recycle Bin.
+                                    </label>
+                                    <button
+                                        type="button"
+                                        className="btn btn-primary"
+                                        disabled={busy || !removalAck}
+                                        onClick={() => void handleApproveRemoval()}
+                                    >
+                                        Approve Recycle Bin removal
+                                    </button>
+                                    <button
+                                        type="button"
+                                        className="btn btn-ghost"
+                                        disabled={busy}
+                                        onClick={() => void handleRejectRemoval()}
+                                    >
+                                        Reject
+                                    </button>
+                                </div>
+                            ) : null}
+                        </div>
+                    ) : null}
+
+                    {removalJob ? (
+                        <div className="banner banner-info" role="status">
+                            <strong>Removal {removalJob.status}</strong>
+                            <p>
+                                Selected {removalJob.metrics.filesSelected} ·
+                                recycled {removalJob.metrics.filesRecycled} ·
+                                failed {removalJob.metrics.filesFailed} ·
+                                indeterminate{" "}
+                                {removalJob.metrics.filesIndeterminate} ·
+                                permanently removed{" "}
+                                {removalJob.metrics.filesPermanentlyRemoved} ·
+                                free-space delta{" "}
+                                {removalJob.metrics.freeBytesDelta == null
+                                    ? "unknown"
+                                    : formatBytes(
+                                          removalJob.metrics.freeBytesDelta,
+                                      )}{" "}
+                                (observed snapshot only).
+                            </p>
+                            {removalJob.criticalFailure ? (
+                                <p>
+                                    Critical failure: permanent-deletion evidence
+                                    disabled further removals.{" "}
+                                    {removalJob.failureMessage}
+                                </p>
+                            ) : null}
+                            <p>
+                                Restore recycled synthetic items from File Explorer
+                                Recycle Bin if needed. Unrelated recycled items are
+                                never touched.
+                            </p>
+                            {removalJob.status === "running" ||
+                            removalJob.status === "cancelling" ||
+                            removalJob.status === "starting" ? (
+                                <button
+                                    type="button"
+                                    className="btn btn-ghost"
+                                    disabled={
+                                        busy ||
+                                        removalJob.status === "cancelling"
+                                    }
+                                    onClick={() =>
+                                        void cancelStorageRemoval(
+                                            removalJob.removalId,
+                                        ).then(setRemovalJob)
+                                    }
+                                >
+                                    Cancel removal
+                                </button>
+                            ) : null}
+                            <ul>
+                                {removalJob.files.map((file) => (
+                                    <li key={file.entryId}>
+                                        <code>{file.sourcePath}</code> —{" "}
+                                        {file.outcome}
+                                        {file.detail ? ` (${file.detail})` : ""}
+                                    </li>
+                                ))}
+                            </ul>
                         </div>
                     ) : null}
                 </div>
