@@ -11,6 +11,7 @@ data/conversation-archive/
 data/conversation-memory-index.json
 data/transfer-journal/
 data/removal-journal/
+data/manual-reclamation.json
 native/windows-recycle/windows-recycle.exe
 native/windows-recycle/windows-recycle.obj
 native/windows-recycle/windows-recycle.provenance.json

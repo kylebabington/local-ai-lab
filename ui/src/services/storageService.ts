@@ -253,3 +253,113 @@ export async function cancelStorageRemoval(removalId: string): Promise<RemovalJo
     );
     return data.removal;
 }
+
+export interface ManualObservation {
+    entryId: string;
+    transferId: string;
+    sourcePath: string;
+    destinationPath: string;
+    sizeBytes: number;
+    eligibility: string;
+    lastVerifiedAt: string | null;
+    sourceHashVerified: boolean;
+    destinationHashVerified: boolean;
+    volumeIdentityMatch: boolean;
+    volumeId: string | null;
+    volumeMount: string | null;
+    freeBytesObserved: number | null;
+    freeBytesPrior: number | null;
+    freeSpaceChangeObserved: number | null;
+    freeSpaceAttribution: string;
+    originalStatus: string;
+    destinationVerification: {
+        status: string;
+        hashMatched: boolean;
+        detail: string | null;
+    };
+    userReported: {
+        userReportedStatus: string;
+        note: string | null;
+        markedAt: string;
+        label: string;
+        machineRemoved: boolean;
+    } | null;
+    machineClaim: {
+        localAiRemovedFile: boolean;
+        note: string;
+    };
+    guidance: {
+        recommendedForManualReview: boolean;
+        excludedFromRecommendation: boolean;
+        explorerSteps: string[];
+        warnings: string[];
+        prerequisites: string[];
+    };
+    observedAt: string;
+}
+
+export async function reverifyManualEntry(
+    reclaimJobId: string,
+    entryId: string,
+): Promise<ManualObservation> {
+    const data = await apiRequest<{ observation: ManualObservation }>(
+        `/api/storage/reclaim-jobs/${encodeURIComponent(reclaimJobId)}/entries/${encodeURIComponent(entryId)}/reverify`,
+        {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({}),
+        },
+    );
+    return data.observation;
+}
+
+export async function observeManualCleanup(
+    reclaimJobId: string,
+    entryIds: string[],
+    priorFreeBytes?: number | null,
+): Promise<{ results: ManualObservation[]; machineClaim: { localAiRemovedFile: boolean; note: string } }> {
+    return apiRequest(
+        `/api/storage/reclaim-jobs/${encodeURIComponent(reclaimJobId)}/manual-observe`,
+        {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({ entryIds, priorFreeBytes }),
+        },
+    );
+}
+
+export async function markManualReclamationHandled(body: {
+    transferId: string;
+    entryId: string;
+    reclaimJobId?: string;
+    note?: string;
+}): Promise<{ entry: { userReportedStatus: string; markedAt: string; label: string } }> {
+    return apiRequest("/api/storage/manual-reclamation/mark-handled", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+    });
+}
+
+export async function fetchManualGuidance(
+    reclaimJobId: string,
+    entryId: string,
+): Promise<{
+    guidance: {
+        recommendedForManualReview: boolean;
+        excludedFromRecommendation: boolean;
+        explorerSteps: string[];
+        warnings: string[];
+        prerequisites: string[];
+    };
+}> {
+    return apiRequest(
+        `/api/storage/reclaim-jobs/${encodeURIComponent(reclaimJobId)}/entries/${encodeURIComponent(entryId)}/guidance`,
+    );
+}

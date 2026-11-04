@@ -6,6 +6,7 @@ import {
     cancelStorageRemoval,
     cancelStorageTransfer,
     createStoragePlan,
+    fetchManualGuidance,
     fetchStorageDrives,
     fetchStoragePlan,
     fetchStoragePlans,
@@ -14,9 +15,13 @@ import {
     fetchStorageTransfer,
     lockReclaimSelection,
     lockStorageSelection,
+    markManualReclamationHandled,
+    type ManualObservation,
+    observeManualCleanup,
     refreshStorageDrives,
     requestStorageRemoval,
     requestStorageTransfer,
+    reverifyManualEntry,
     startStorageReclaimReview,
 } from "../services/storageService";
 import type {
@@ -106,6 +111,20 @@ export function StorageOffloadPanel({
         useState<PendingApproval | null>(null);
     const [removalAck, setRemovalAck] = useState(false);
     const [removalJob, setRemovalJob] = useState<RemovalJob | null>(null);
+    const [manualFocusId, setManualFocusId] = useState<string | null>(null);
+    const [manualObservation, setManualObservation] =
+        useState<ManualObservation | null>(null);
+    const [manualGuidance, setManualGuidance] = useState<{
+        recommendedForManualReview: boolean;
+        excludedFromRecommendation: boolean;
+        explorerSteps: string[];
+        warnings: string[];
+        prerequisites: string[];
+    } | null>(null);
+    const [handledEntryIds, setHandledEntryIds] = useState<Set<string>>(
+        () => new Set(),
+    );
+    const [priorFreeBytes, setPriorFreeBytes] = useState<number | null>(null);
     const [expandedEntryId, setExpandedEntryId] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
@@ -511,6 +530,116 @@ export function StorageOffloadPanel({
                 caught instanceof Error
                     ? caught.message
                     : "Could not reject removal.",
+            );
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function copyText(value: string) {
+        try {
+            await navigator.clipboard.writeText(value);
+        } catch {
+            setError("Could not copy to clipboard.");
+        }
+    }
+
+    async function handleManualReverify(entryId: string) {
+        if (!reclaimJob) {
+            return;
+        }
+        setBusy(true);
+        setError(null);
+        setManualFocusId(entryId);
+        try {
+            const observation = await reverifyManualEntry(
+                reclaimJob.jobId,
+                entryId,
+            );
+            setManualObservation(observation);
+            if (observation.freeBytesObserved != null) {
+                setPriorFreeBytes(observation.freeBytesObserved);
+            }
+        } catch (caught) {
+            setError(
+                caught instanceof Error
+                    ? caught.message
+                    : "Could not reverify that file.",
+            );
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function handleManualRecheck(entryId: string) {
+        if (!reclaimJob) {
+            return;
+        }
+        setBusy(true);
+        setError(null);
+        setManualFocusId(entryId);
+        try {
+            const result = await observeManualCleanup(
+                reclaimJob.jobId,
+                [entryId],
+                priorFreeBytes,
+            );
+            const observation = result.results[0] ?? null;
+            setManualObservation(observation);
+        } catch (caught) {
+            setError(
+                caught instanceof Error
+                    ? caught.message
+                    : "Could not recheck source status.",
+            );
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function handleShowGuidance(entryId: string) {
+        if (!reclaimJob) {
+            return;
+        }
+        setBusy(true);
+        setError(null);
+        setManualFocusId(entryId);
+        try {
+            const result = await fetchManualGuidance(
+                reclaimJob.jobId,
+                entryId,
+            );
+            setManualGuidance(result.guidance);
+        } catch (caught) {
+            setError(
+                caught instanceof Error
+                    ? caught.message
+                    : "Could not load recovery guidance.",
+            );
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function handleMarkManuallyHandled(candidate: ReclaimCandidate) {
+        if (!reclaimJob) {
+            return;
+        }
+        setBusy(true);
+        setError(null);
+        try {
+            await markManualReclamationHandled({
+                transferId: reclaimJob.transferId,
+                entryId: candidate.entryId,
+                reclaimJobId: reclaimJob.jobId,
+                note: "User reported handling via File Explorer.",
+            });
+            setHandledEntryIds((prev) => new Set(prev).add(candidate.entryId));
+        } catch (caught) {
+            setError(
+                caught instanceof Error
+                    ? caught.message
+                    : "Could not mark as manually handled.",
             );
         } finally {
             setBusy(false);
@@ -1271,6 +1400,286 @@ export function StorageOffloadPanel({
                                     })}
                                 </tbody>
                             </table>
+                        </div>
+                    ) : null}
+
+                    {reclaimJob.status === "completed" ||
+                    reclaimJob.status === "incomplete" ? (
+                        <div className="storage-offload-table-wrap">
+                            <h3>Review Files to Reclaim Manually</h3>
+                            <p>
+                                For real user files, Local AI only guides review.
+                                Any delete, recycle, or move must be done by you in
+                                Windows File Explorer. Local AI never claims it
+                                removed a real file.
+                            </p>
+                            <table className="storage-offload-table">
+                                <thead>
+                                    <tr>
+                                        <th scope="col">Original</th>
+                                        <th scope="col">External copy</th>
+                                        <th scope="col">Size</th>
+                                        <th scope="col">SHA-256</th>
+                                        <th scope="col">Eligibility</th>
+                                        <th scope="col">Verified</th>
+                                        <th scope="col">Actions</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {reclaimJob.candidates.map((candidate) => {
+                                        const isSynthetic =
+                                            candidate.syntheticRemovalAuthorized ===
+                                            true;
+                                        return (
+                                            <tr key={`manual-${candidate.entryId}`}>
+                                                <td>
+                                                    <code>
+                                                        {candidate.sourcePath}
+                                                    </code>
+                                                    {handledEntryIds.has(
+                                                        candidate.entryId,
+                                                    ) ? (
+                                                        <p>
+                                                            Marked manually handled
+                                                            (user-reported)
+                                                        </p>
+                                                    ) : null}
+                                                    {isSynthetic ? (
+                                                        <p>
+                                                            Synthetic path —
+                                                            automated recycle
+                                                            available above when
+                                                            eligible.
+                                                        </p>
+                                                    ) : null}
+                                                </td>
+                                                <td>
+                                                    <code>
+                                                        {
+                                                            candidate.destinationPath
+                                                        }
+                                                    </code>
+                                                </td>
+                                                <td>
+                                                    {formatBytes(
+                                                        candidate.sizeBytes,
+                                                    )}
+                                                </td>
+                                                <td>
+                                                    src{" "}
+                                                    {candidate.sourceHashVerified
+                                                        ? "verified"
+                                                        : candidate.sourceIntegrity
+                                                              .status}{" "}
+                                                    · dest{" "}
+                                                    {candidate.destinationHashVerified
+                                                        ? "verified"
+                                                        : candidate
+                                                              .destinationIntegrity
+                                                              .status}
+                                                </td>
+                                                <td>
+                                                    {eligibilityLabel(
+                                                        candidate.eligibility,
+                                                    )}
+                                                </td>
+                                                <td>
+                                                    {candidate.lastVerifiedAt ??
+                                                        "—"}
+                                                </td>
+                                                <td>
+                                                    <div className="storage-offload-actions">
+                                                        <button
+                                                            type="button"
+                                                            className="btn btn-ghost"
+                                                            disabled={busy}
+                                                            onClick={() =>
+                                                                void copyText(
+                                                                    candidate.sourcePath,
+                                                                )
+                                                            }
+                                                        >
+                                                            Copy original path
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            className="btn btn-ghost"
+                                                            disabled={busy}
+                                                            onClick={() =>
+                                                                void copyText(
+                                                                    candidate.destinationPath,
+                                                                )
+                                                            }
+                                                        >
+                                                            Copy external path
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            className="btn btn-ghost"
+                                                            disabled={busy}
+                                                            onClick={() =>
+                                                                void handleManualReverify(
+                                                                    candidate.entryId,
+                                                                )
+                                                            }
+                                                        >
+                                                            Reverify selected
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            className="btn btn-ghost"
+                                                            disabled={busy}
+                                                            onClick={() =>
+                                                                void handleManualRecheck(
+                                                                    candidate.entryId,
+                                                                )
+                                                            }
+                                                        >
+                                                            Recheck source status
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            className="btn btn-ghost"
+                                                            disabled={busy}
+                                                            onClick={() =>
+                                                                void handleShowGuidance(
+                                                                    candidate.entryId,
+                                                                )
+                                                            }
+                                                        >
+                                                            Show recovery guidance
+                                                        </button>
+                                                        <button
+                                                            type="button"
+                                                            className="btn btn-primary"
+                                                            disabled={busy}
+                                                            onClick={() =>
+                                                                void handleMarkManuallyHandled(
+                                                                    candidate,
+                                                                )
+                                                            }
+                                                        >
+                                                            Mark as manually handled
+                                                        </button>
+                                                    </div>
+                                                    {manualFocusId ===
+                                                        candidate.entryId &&
+                                                    (candidate.dependencyConfidence ||
+                                                        candidate.cloudReparseSafety) ? (
+                                                        <div>
+                                                            <p>
+                                                                Dependencies:{" "}
+                                                                {
+                                                                    candidate
+                                                                        .dependencyConfidence
+                                                                        .status
+                                                                }
+                                                                {candidate
+                                                                    .dependencyConfidence
+                                                                    .reason
+                                                                    ? ` — ${candidate.dependencyConfidence.reason}`
+                                                                    : ""}
+                                                            </p>
+                                                            <p>
+                                                                Cloud/reparse:{" "}
+                                                                {
+                                                                    candidate
+                                                                        .cloudReparseSafety
+                                                                        .status
+                                                                }
+                                                                {candidate
+                                                                    .cloudReparseSafety
+                                                                    .reason
+                                                                    ? ` — ${candidate.cloudReparseSafety.reason}`
+                                                                    : ""}
+                                                            </p>
+                                                        </div>
+                                                    ) : null}
+                                                </td>
+                                            </tr>
+                                        );
+                                    })}
+                                </tbody>
+                            </table>
+                            {manualGuidance ? (
+                                <div className="banner banner-info" role="status">
+                                    <strong>Recovery guidance</strong>
+                                    <p>
+                                        Recommended for manual review:{" "}
+                                        {manualGuidance.recommendedForManualReview
+                                            ? "yes (still not declared safe to delete)"
+                                            : "no"}
+                                        {manualGuidance.excludedFromRecommendation
+                                            ? " · excluded from recommended cleanup"
+                                            : ""}
+                                    </p>
+                                    <p>
+                                        <strong>Before you act in Explorer</strong>
+                                    </p>
+                                    <ul>
+                                        {manualGuidance.prerequisites.map(
+                                            (step) => (
+                                                <li key={step}>{step}</li>
+                                            ),
+                                        )}
+                                    </ul>
+                                    <p>
+                                        <strong>Explorer steps</strong>
+                                    </p>
+                                    <ol>
+                                        {manualGuidance.explorerSteps.map(
+                                            (step) => (
+                                                <li key={step}>{step}</li>
+                                            ),
+                                        )}
+                                    </ol>
+                                    <p>
+                                        <strong>Warnings</strong>
+                                    </p>
+                                    <ul>
+                                        {manualGuidance.warnings.map((step) => (
+                                            <li key={step}>{step}</li>
+                                        ))}
+                                    </ul>
+                                </div>
+                            ) : null}
+                            {manualObservation ? (
+                                <div className="banner banner-info" role="status">
+                                    <strong>Post-cleanup observation</strong>
+                                    <p>
+                                        Original: {manualObservation.originalStatus}{" "}
+                                        · External copy:{" "}
+                                        {
+                                            manualObservation
+                                                .destinationVerification.status
+                                        }{" "}
+                                        · Volume identity:{" "}
+                                        {manualObservation.volumeIdentityMatch
+                                            ? "matched"
+                                            : "mismatch / unavailable"}
+                                    </p>
+                                    <p>
+                                        Free space observed:{" "}
+                                        {formatBytes(
+                                            manualObservation.freeBytesObserved,
+                                        )}
+                                        {manualObservation.freeSpaceChangeObserved !=
+                                        null
+                                            ? ` · delta ${formatBytes(Math.abs(manualObservation.freeSpaceChangeObserved))}${manualObservation.freeSpaceChangeObserved >= 0 ? " freed/gained snapshot" : " consumed snapshot"}`
+                                            : ""}
+                                    </p>
+                                    <p>
+                                        {
+                                            manualObservation.freeSpaceAttribution
+                                        }
+                                    </p>
+                                    <p>
+                                        {
+                                            manualObservation.machineClaim.note
+                                        }
+                                    </p>
+                                </div>
+                            ) : null}
                         </div>
                     ) : null}
 

@@ -17,6 +17,7 @@
     "verify:storage-transfer": "node scripts/verify-storage-transfer.js",
     "verify:storage-reclaim": "node scripts/verify-storage-reclaim.js",
     "verify:storage-removal": "node scripts/verify-storage-removal.js",
+    "verify:storage-manual-reclaim": "node scripts/verify-storage-manual-reclaim.js",
     "build:windows-recycle": "node scripts/build-windows-recycle.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

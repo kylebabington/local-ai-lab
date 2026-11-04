@@ -120,6 +120,13 @@ import {
     requestCancelRemovalJob,
 } from "./lib/tools/storage-removal.js";
 import {
+    getManualGuidanceForJob,
+    listManualReclamation,
+    markManuallyHandled,
+    observeManualCleanup,
+    reverifyManualEntry,
+} from "./lib/tools/storage-manual-reclaim.js";
+import {
     describeStorageSession,
     grantScanFolder,
 } from "./lib/tools/storage.js";
@@ -1548,6 +1555,120 @@ async function handleStorageReclaimManifestsGet(response) {
 }
 
 
+async function handleManualReclamationGet(request, response) {
+    try {
+        const url = new URL(request.url || "/", `http://${HOST}`);
+        const transferId = url.searchParams.get("transferId");
+        if (!transferId) {
+            sendError(response, 400, "transferId query parameter is required.");
+            return;
+        }
+        const result = await listManualReclamation(transferId);
+        sendJson(response, 200, result);
+    } catch (error) {
+        console.error("GET /api/storage/manual-reclamation failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not load manual reclamation state."),
+        );
+    }
+}
+
+
+async function handleManualReclamationMarkHandledPost(request, response) {
+    let body;
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    try {
+        const entry = await markManuallyHandled({
+            transferId: body.transferId,
+            entryId: body.entryId,
+            note: body.note,
+            reclaimJobId: body.reclaimJobId,
+        });
+        sendJson(response, 200, { entry });
+    } catch (error) {
+        console.error(
+            "POST /api/storage/manual-reclamation/mark-handled failed:",
+            error.message,
+        );
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not record manual handling."),
+        );
+    }
+}
+
+
+async function handleManualReverifyPost(response, reclaimJobId, entryId) {
+    try {
+        const result = await reverifyManualEntry(reclaimJobId, entryId);
+        sendJson(response, 200, { observation: result });
+    } catch (error) {
+        console.error(
+            "POST /api/storage/reclaim-jobs/:id/entries/:entryId/reverify failed:",
+            error.message,
+        );
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not reverify that file."),
+        );
+    }
+}
+
+
+async function handleManualObservePost(request, response, reclaimJobId) {
+    let body;
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    try {
+        const result = await observeManualCleanup(
+            reclaimJobId,
+            body.entryIds,
+            { priorFreeBytes: body.priorFreeBytes },
+        );
+        sendJson(response, 200, result);
+    } catch (error) {
+        console.error(
+            "POST /api/storage/reclaim-jobs/:id/manual-observe failed:",
+            error.message,
+        );
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not observe manual cleanup status."),
+        );
+    }
+}
+
+
+async function handleManualGuidanceGet(response, reclaimJobId, entryId) {
+    try {
+        const result = getManualGuidanceForJob(reclaimJobId, entryId);
+        sendJson(response, 200, result);
+    } catch (error) {
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not load recovery guidance."),
+        );
+    }
+}
+
+
 async function handleStorageReclaimManifestGet(response, manifestId) {
     try {
         const manifest = getPublicReclaimManifest(manifestId);
@@ -2142,6 +2263,63 @@ async function routeRequest(request, response, url) {
         }
 
         {
+            const manualReverifyMatch = pathname.match(
+                /^\/api\/storage\/reclaim-jobs\/([^/]+)\/entries\/([^/]+)\/reverify$/,
+            );
+
+            if (manualReverifyMatch) {
+                if (!requireMethod(request, response, ["POST"])) {
+                    return;
+                }
+
+                await handleManualReverifyPost(
+                    response,
+                    decodeURIComponent(manualReverifyMatch[1]),
+                    decodeURIComponent(manualReverifyMatch[2]),
+                );
+                return;
+            }
+        }
+
+        {
+            const manualGuidanceMatch = pathname.match(
+                /^\/api\/storage\/reclaim-jobs\/([^/]+)\/entries\/([^/]+)\/guidance$/,
+            );
+
+            if (manualGuidanceMatch) {
+                if (!requireMethod(request, response, ["GET"])) {
+                    return;
+                }
+
+                await handleManualGuidanceGet(
+                    response,
+                    decodeURIComponent(manualGuidanceMatch[1]),
+                    decodeURIComponent(manualGuidanceMatch[2]),
+                );
+                return;
+            }
+        }
+
+        {
+            const manualObserveMatch = pathname.match(
+                /^\/api\/storage\/reclaim-jobs\/([^/]+)\/manual-observe$/,
+            );
+
+            if (manualObserveMatch) {
+                if (!requireMethod(request, response, ["POST"])) {
+                    return;
+                }
+
+                await handleManualObservePost(
+                    request,
+                    response,
+                    decodeURIComponent(manualObserveMatch[1]),
+                );
+                return;
+            }
+        }
+
+        {
             const reclaimJobMatch = pathname.match(
                 /^\/api\/storage\/reclaim-jobs\/([^/]+)$/,
             );
@@ -2157,6 +2335,24 @@ async function routeRequest(request, response, url) {
                 );
                 return;
             }
+        }
+
+        if (pathname === "/api/storage/manual-reclamation") {
+            if (!requireMethod(request, response, ["GET"])) {
+                return;
+            }
+
+            await handleManualReclamationGet(request, response);
+            return;
+        }
+
+        if (pathname === "/api/storage/manual-reclamation/mark-handled") {
+            if (!requireMethod(request, response, ["POST"])) {
+                return;
+            }
+
+            await handleManualReclamationMarkHandledPost(request, response);
+            return;
         }
 
         if (pathname === "/api/storage/reclaim-manifests") {

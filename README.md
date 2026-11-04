@@ -192,6 +192,12 @@ Verify with `npm run verify:storage-removal` (mocked, helper-build, live-recycle
 
 **Not enabled:** real Documents/Downloads/media/project files, permanent deletion, emptying the Recycle Bin, generic delete tools.
 
+### Guided manual reclamation (Milestone D2.5)
+
+For real verified originals, the Computer panel’s **Review Files to Reclaim Manually** section is read-only guidance: copy paths, reverify the external copy, recheck whether the original still exists, mark user-reported handling, and show Explorer recovery steps. Local AI never deletes, recycles, or moves real user files. Free-space deltas are observational and are not attributed as Local AI removals.
+
+Verify with `npm run verify:storage-manual-reclaim`.
+
 ### Allowed roots
 
 By default, tools may only touch `process.cwd()` (the folder where you started `npm run server`).
