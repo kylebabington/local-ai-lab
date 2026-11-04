@@ -3,6 +3,7 @@ import type {
     LockedManifest,
     OffloadPlan,
     PendingApproval,
+    ReclaimJob,
     StorageDriveSnapshot,
     StorageGrant,
     StorageSession,
@@ -157,4 +158,42 @@ export async function cancelStorageTransfer(
         },
     );
     return data.transfer;
+}
+
+export async function startStorageReclaimReview(
+    transferId: string,
+    body: { entryIds?: string[]; maxMs?: number } = {},
+): Promise<ReclaimJob> {
+    const data = await apiRequest<{ job: ReclaimJob }>(
+        `/api/storage/transfers/${encodeURIComponent(transferId)}/reclaim-review`,
+        {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify(body),
+        },
+    );
+    return data.job;
+}
+
+export async function fetchStorageReclaimJob(jobId: string): Promise<ReclaimJob> {
+    const data = await apiRequest<{ job: ReclaimJob }>(
+        `/api/storage/reclaim-jobs/${encodeURIComponent(jobId)}`,
+    );
+    return data.job;
+}
+
+export async function cancelStorageReclaimJob(jobId: string): Promise<ReclaimJob> {
+    const data = await apiRequest<{ job: ReclaimJob }>(
+        `/api/storage/reclaim-jobs/${encodeURIComponent(jobId)}/cancel`,
+        {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+            },
+            body: JSON.stringify({}),
+        },
+    );
+    return data.job;
 }

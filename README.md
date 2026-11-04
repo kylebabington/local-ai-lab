@@ -136,8 +136,8 @@ Computer mode can inspect files inside allowed roots and propose a few filesyste
 
 ### Permission classes
 
-* **Read (auto):** `list_directory`, `get_file_info`, `search_files`, `read_text_file`, `search_file_index`, `get_indexed_file`, `inspect_processes`, `inspect_event_log`, `inspect_system_health`, `inspect_services`, `inspect_network`, `inspect_resource_consumers`, `inspect_disk_usage`, `inspect_external_drives`, `plan_storage_offload`
-* **Approval required:** `create_directory`, `copy_file`, `move_file`, `rename_file`, `request_storage_scan` — shown in the UI until you approve or reject. Approve/reject send only the stored approval id, not a new path from the browser
+* **Read (auto):** `list_directory`, `get_file_info`, `search_files`, `read_text_file`, `search_file_index`, `get_indexed_file`, `inspect_processes`, `inspect_event_log`, `inspect_system_health`, `inspect_services`, `inspect_network`, `inspect_resource_consumers`, `inspect_disk_usage`, `inspect_external_drives`, `plan_storage_offload`, `inspect_reclaim_candidates`
+* **Approval required:** `create_directory`, `copy_file`, `move_file`, `rename_file`, `request_storage_scan`, `copy_and_verify_files` — shown in the UI until you approve or reject. Approve/reject send only the stored approval id, not a new path from the browser
 * **High risk (not enabled):** delete, overwrite, shell, and install. They appear on the Tools page as blocked labels only
 
 Destinations that already exist are refused. Symbolic links are refused, including a symlink in the middle of a path.
@@ -159,6 +159,36 @@ This is a third authority, separate from Computer filesystem roots and File Inte
 The Computer UI lets you review each file, select exact entries, and **lock** an immutable manifest bound to those entry IDs and the current session. `copy_and_verify_files` then requires user approval, copies without overwriting, verifies with SHA-256, and **never deletes sources**. Preparing, locking, or copying does **not** free internal disk space.
 
 Verify with `npm run verify:storage-transfer` (synthetic sandboxes; optional live external-drive case).
+
+### Verified reclaim analysis (Milestone D1, read-only)
+
+After a transfer, `inspect_reclaim_candidates` independently re-checks journaled files for potential reclaim review. Arguments are only `transferId` and optional `entryIds` — never filesystem paths.
+
+**Trust model**
+
+* New transfers write journal schema version 2 with a frozen `manifestSnapshot` captured at job start.
+* Reclaim recomputes the canonical manifest hash from that snapshot and, when available, compares it to the still-held session manifest or same-session transfer provenance.
+* An unkeyed hash stored beside editable journal JSON is **not** treated as cryptographic authenticity by itself.
+* Legacy Milestone C journals without a snapshot remain inspectable for reports, but are **never** classified `eligible_for_review`. Historical journals are never rewritten to invent snapshots.
+* Users are not required to recopy files merely to view an existing transfer report.
+
+**Classification** separates copy/source/destination integrity, source authorization, dependency confidence, and cloud/reparse safety from removal-review eligibility (`eligible_for_review`, `requires_manual_review`, `excluded`, `verification_failed`). Uncertain dependencies do not collapse into integrity failure. Cloud placeholders are never silently hydrated. Verification runs as a bounded, cancellable, one-file-at-a-time job with progress; hashes and full file lists stay out of the model context.
+
+The Computer **Review Verified Originals** panel shows counts, estimates, and per-file details. Logical size is never presented as guaranteed recoverable disk space. `bytesActuallyReclaimed` is always **0** in D1. There is no Delete, Remove, or Recycle action.
+
+Verify with `npm run verify:storage-reclaim` (mocked/synthetic results reported separately from optional live Windows cases).
+
+### Milestone D2 design (not implemented)
+
+Future source removal would be a **separate** approval from copy:
+
+* Exact per-file selection from a freshly re-verified reclaim result / short-lived reclaim manifest (no model-supplied paths; no generic delete tool for Ollama).
+* Fresh verification immediately before each removal; failed hashes, missing destinations, revoked grants, protected paths, and changed volume identities cannot be overridden by “manual confirmation.”
+* Preferred disposal: Windows Recycle Bin via a pinned native helper using `IFileOperation` with `FOFX_RECYCLEONDELETE` / `FOFX_ADDUNDORECORD` (STA COM). Refuse and show manual instructions when Recycle Bin cannot be guaranteed (subst/network/some removable volumes).
+* Clear UI distinction between Recycle Bin and permanent deletion; irreversible-action warnings; measure actual recovered space; full audit history.
+* Manual-review workflow for copies that verify but whose dependencies remain uncertain — separately approved, never a bypass for integrity failures.
+
+D2 is documentation only until separately approved. D1 does not delete, recycle, or modify originals.
 
 ### Allowed roots
 

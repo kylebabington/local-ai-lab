@@ -154,6 +154,85 @@ export interface StorageTransfer {
     }>;
 }
 
+export type ReclaimEligibility =
+    | "eligible_for_review"
+    | "requires_manual_review"
+    | "excluded"
+    | "verification_failed";
+
+export interface ReclaimIntegrityField {
+    status: string;
+    reason: string | null;
+}
+
+export interface ReclaimCandidate {
+    entryId: string;
+    sourcePath: string;
+    destinationPath: string;
+    sizeBytes: number;
+    eligibility: ReclaimEligibility;
+    copyIntegrity: ReclaimIntegrityField;
+    sourceIntegrity: ReclaimIntegrityField;
+    destinationIntegrity: ReclaimIntegrityField;
+    sourceAuthorization: ReclaimIntegrityField;
+    dependencyConfidence: ReclaimIntegrityField;
+    cloudReparseSafety: ReclaimIntegrityField;
+    reasons: string[];
+    manualReviewNeeds: string[];
+    warnings: string[];
+    estimatedRecoverableLogicalBytes: number;
+    estimatedRecoverablePhysicalBytes: number | null;
+    estimateConfidence: string;
+    journalState: string;
+    sourceHashVerified: boolean;
+    destinationHashVerified: boolean;
+}
+
+export interface ReclaimJob {
+    jobId: string;
+    transferId: string;
+    status: string;
+    transferStatus: string;
+    transferComplete: boolean;
+    schemaVersion: number;
+    manifestTrust: string;
+    trustLimitations: string[];
+    entryCount: number;
+    processedFiles: number;
+    currentFile: string | null;
+    currentEntryId: string | null;
+    startedAt: string;
+    finishedAt: string | null;
+    failureCode: string | null;
+    failureMessage: string | null;
+    cancelRequested: boolean;
+    progress: {
+        completed: number;
+        total: number;
+        percent: number;
+    };
+    estimates: {
+        logicalBytesCopiedAndVerifiedInJournal: number;
+        logicalBytesIndependentlyReverified: number;
+        potentiallyRemovableLogicalBytes: number;
+        estimatedPhysicallyRecoverableBytes: number | null;
+        estimateConfidence: string;
+        bytesActuallyReclaimed: number;
+        notes: string[];
+    };
+    counts: {
+        eligible_for_review: number;
+        requires_manual_review: number;
+        excluded: number;
+        verification_failed: number;
+        reverified: number;
+    };
+    message: string;
+    interpretationLimits: string[];
+    candidates: ReclaimCandidate[];
+    bytesActuallyReclaimed: number;
+}
+
 export interface ChatMessage {
     id: string;
     role: MessageRole;

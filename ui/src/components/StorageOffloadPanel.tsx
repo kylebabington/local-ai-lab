@@ -2,21 +2,26 @@ import { useEffect, useMemo, useState } from "react";
 
 import { approveAction, rejectAction } from "../services/agentService";
 import {
+    cancelStorageReclaimJob,
     cancelStorageTransfer,
     createStoragePlan,
     fetchStorageDrives,
     fetchStoragePlan,
     fetchStoragePlans,
+    fetchStorageReclaimJob,
     fetchStorageTransfer,
     lockStorageSelection,
     refreshStorageDrives,
     requestStorageTransfer,
+    startStorageReclaimReview,
 } from "../services/storageService";
 import type {
     LockedManifest,
     OffloadPlan,
     OffloadPlanEntry,
     PendingApproval,
+    ReclaimCandidate,
+    ReclaimJob,
     StorageTransfer,
     StorageVolume,
 } from "../types";
@@ -53,6 +58,19 @@ function safetyLabel(safety: OffloadPlanEntry["safety"]): string {
     return "Excluded";
 }
 
+function eligibilityLabel(eligibility: ReclaimCandidate["eligibility"]): string {
+    if (eligibility === "eligible_for_review") {
+        return "Eligible for review";
+    }
+    if (eligibility === "requires_manual_review") {
+        return "Requires manual review";
+    }
+    if (eligibility === "excluded") {
+        return "Excluded";
+    }
+    return "Verification failed";
+}
+
 interface StorageOffloadPanelProps {
     refreshKey?: number;
     hasGrants: boolean;
@@ -72,6 +90,8 @@ export function StorageOffloadPanel({
     const [incompleteAck, setIncompleteAck] = useState(false);
     const [authorizeHydrate, setAuthorizeHydrate] = useState(false);
     const [transfer, setTransfer] = useState<StorageTransfer | null>(null);
+    const [reclaimJob, setReclaimJob] = useState<ReclaimJob | null>(null);
+    const [expandedEntryId, setExpandedEntryId] = useState<string | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
 
@@ -342,6 +362,51 @@ export function StorageOffloadPanel({
         }
     }
 
+    async function handleStartReclaimReview() {
+        if (!transfer) {
+            return;
+        }
+
+        setBusy(true);
+        setError(null);
+        setExpandedEntryId(null);
+
+        try {
+            const job = await startStorageReclaimReview(transfer.transferId);
+            setReclaimJob(job);
+        } catch (caught) {
+            setError(
+                caught instanceof Error
+                    ? caught.message
+                    : "Could not start reclaim review.",
+            );
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function handleCancelReclaimReview() {
+        if (!reclaimJob) {
+            return;
+        }
+
+        setBusy(true);
+        setError(null);
+
+        try {
+            const job = await cancelStorageReclaimJob(reclaimJob.jobId);
+            setReclaimJob(job);
+        } catch (caught) {
+            setError(
+                caught instanceof Error
+                    ? caught.message
+                    : "Could not cancel reclaim review.",
+            );
+        } finally {
+            setBusy(false);
+        }
+    }
+
     useEffect(() => {
         if (
             !transfer ||
@@ -363,6 +428,28 @@ export function StorageOffloadPanel({
 
         return () => window.clearInterval(timer);
     }, [transfer]);
+
+    useEffect(() => {
+        if (
+            !reclaimJob ||
+            reclaimJob.status === "completed" ||
+            reclaimJob.status === "failed" ||
+            reclaimJob.status === "cancelled" ||
+            reclaimJob.status === "incomplete"
+        ) {
+            return;
+        }
+
+        const timer = window.setInterval(() => {
+            void fetchStorageReclaimJob(reclaimJob.jobId)
+                .then((live) => setReclaimJob(live))
+                .catch(() => {
+                    // keep last known state
+                });
+        }, 1000);
+
+        return () => window.clearInterval(timer);
+    }, [reclaimJob]);
 
     return (
         <article className="storage-scan-panel" aria-label="Storage offload planning">
@@ -700,8 +787,249 @@ export function StorageOffloadPanel({
                             Partial transfer warning: some files were not
                             verified. Originals remain untouched. Temporary
                             `.partial` files may remain on the destination for
-                            manual review.
+                            manual review. Individually verified files can still
+                            be reviewed below.
                         </p>
+                    ) : null}
+                    {transfer.status === "completed" ||
+                    transfer.status === "failed" ||
+                    transfer.status === "cancelled" ||
+                    transfer.status === "interrupted" ? (
+                        <button
+                            type="button"
+                            className="btn btn-primary"
+                            disabled={busy}
+                            onClick={() => void handleStartReclaimReview()}
+                        >
+                            Review verified originals
+                        </button>
+                    ) : null}
+                </div>
+            ) : null}
+
+            {reclaimJob ? (
+                <div
+                    className="banner banner-info"
+                    role="region"
+                    aria-label="Review verified originals"
+                >
+                    <strong>Review Verified Originals</strong>
+                    <p>
+                        These files have been evaluated for potential removal. No
+                        original files have been deleted or modified.
+                    </p>
+                    <p>
+                        Transfer status remains{" "}
+                        <code>{reclaimJob.transferStatus}</code>
+                        {reclaimJob.transferComplete
+                            ? " (complete)."
+                            : " (not entirely successful)."}{" "}
+                        Review job {reclaimJob.status}
+                        {reclaimJob.currentFile
+                            ? ` · hashing ${reclaimJob.currentFile}`
+                            : ""}{" "}
+                        · {reclaimJob.progress.completed}/
+                        {reclaimJob.progress.total} checked · trust{" "}
+                        {reclaimJob.manifestTrust}.
+                    </p>
+                    <p>
+                        Copied/verified in journal:{" "}
+                        {formatBytes(
+                            reclaimJob.estimates
+                                .logicalBytesCopiedAndVerifiedInJournal,
+                        )}{" "}
+                        · Independently reverified:{" "}
+                        {formatBytes(
+                            reclaimJob.estimates
+                                .logicalBytesIndependentlyReverified,
+                        )}{" "}
+                        · Potentially removable (logical):{" "}
+                        {formatBytes(
+                            reclaimJob.estimates.potentiallyRemovableLogicalBytes,
+                        )}{" "}
+                        · Estimated physical:{" "}
+                        {reclaimJob.estimates
+                            .estimatedPhysicallyRecoverableBytes == null
+                            ? "uncertain"
+                            : formatBytes(
+                                  reclaimJob.estimates
+                                      .estimatedPhysicallyRecoverableBytes,
+                              )}{" "}
+                        · Actually reclaimed:{" "}
+                        {formatBytes(reclaimJob.bytesActuallyReclaimed)} (always
+                        zero in this milestone).
+                    </p>
+                    <p>
+                        Eligible for review: {reclaimJob.counts.eligible_for_review}{" "}
+                        · Manual review:{" "}
+                        {reclaimJob.counts.requires_manual_review} · Excluded:{" "}
+                        {reclaimJob.counts.excluded} · Verification failed:{" "}
+                        {reclaimJob.counts.verification_failed} · Reverified:{" "}
+                        {reclaimJob.counts.reverified}
+                    </p>
+
+                    {reclaimJob.status === "starting" ||
+                    reclaimJob.status === "running" ||
+                    reclaimJob.status === "cancelling" ? (
+                        <button
+                            type="button"
+                            className="btn btn-ghost"
+                            disabled={
+                                busy || reclaimJob.status === "cancelling"
+                            }
+                            onClick={() => void handleCancelReclaimReview()}
+                        >
+                            Cancel verification
+                        </button>
+                    ) : null}
+
+                    {reclaimJob.candidates.length > 0 ? (
+                        <div className="storage-offload-table-wrap">
+                            <table className="storage-offload-table">
+                                <thead>
+                                    <tr>
+                                        <th scope="col">Original</th>
+                                        <th scope="col">External backup</th>
+                                        <th scope="col">Size</th>
+                                        <th scope="col">Eligibility</th>
+                                        <th scope="col">Verification</th>
+                                        <th scope="col">Details</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {reclaimJob.candidates.map((candidate) => (
+                                        <tr key={candidate.entryId}>
+                                            <td>
+                                                <code>{candidate.sourcePath}</code>
+                                            </td>
+                                            <td>
+                                                <code>
+                                                    {candidate.destinationPath}
+                                                </code>
+                                            </td>
+                                            <td>
+                                                {formatBytes(candidate.sizeBytes)}
+                                            </td>
+                                            <td>
+                                                {eligibilityLabel(
+                                                    candidate.eligibility,
+                                                )}
+                                            </td>
+                                            <td>
+                                                src{" "}
+                                                {candidate.sourceHashVerified
+                                                    ? "ok"
+                                                    : candidate.sourceIntegrity
+                                                          .status}{" "}
+                                                · dest{" "}
+                                                {candidate.destinationHashVerified
+                                                    ? "ok"
+                                                    : candidate.destinationIntegrity
+                                                          .status}
+                                            </td>
+                                            <td>
+                                                <button
+                                                    type="button"
+                                                    className="btn btn-ghost"
+                                                    onClick={() =>
+                                                        setExpandedEntryId(
+                                                            expandedEntryId ===
+                                                                candidate.entryId
+                                                                ? null
+                                                                : candidate.entryId,
+                                                        )
+                                                    }
+                                                >
+                                                    {expandedEntryId ===
+                                                    candidate.entryId
+                                                        ? "Hide"
+                                                        : "Inspect"}
+                                                </button>
+                                                {expandedEntryId ===
+                                                candidate.entryId ? (
+                                                    <div>
+                                                        <p>
+                                                            Copy:{" "}
+                                                            {
+                                                                candidate
+                                                                    .copyIntegrity
+                                                                    .status
+                                                            }
+                                                            {candidate
+                                                                .copyIntegrity
+                                                                .reason
+                                                                ? ` — ${candidate.copyIntegrity.reason}`
+                                                                : ""}
+                                                        </p>
+                                                        <p>
+                                                            Auth:{" "}
+                                                            {
+                                                                candidate
+                                                                    .sourceAuthorization
+                                                                    .status
+                                                            }
+                                                            {candidate
+                                                                .sourceAuthorization
+                                                                .reason
+                                                                ? ` — ${candidate.sourceAuthorization.reason}`
+                                                                : ""}
+                                                        </p>
+                                                        <p>
+                                                            Dependencies:{" "}
+                                                            {
+                                                                candidate
+                                                                    .dependencyConfidence
+                                                                    .status
+                                                            }
+                                                            {candidate
+                                                                .dependencyConfidence
+                                                                .reason
+                                                                ? ` — ${candidate.dependencyConfidence.reason}`
+                                                                : ""}
+                                                        </p>
+                                                        <p>
+                                                            Cloud/reparse:{" "}
+                                                            {
+                                                                candidate
+                                                                    .cloudReparseSafety
+                                                                    .status
+                                                            }
+                                                        </p>
+                                                        {[
+                                                            ...candidate.reasons,
+                                                            ...candidate.warnings,
+                                                            ...candidate.manualReviewNeeds,
+                                                        ].length > 0 ? (
+                                                            <ul>
+                                                                {[
+                                                                    ...candidate.reasons,
+                                                                    ...candidate.warnings,
+                                                                    ...candidate.manualReviewNeeds,
+                                                                ].map(
+                                                                    (line) => (
+                                                                        <li
+                                                                            key={
+                                                                                line
+                                                                            }
+                                                                        >
+                                                                            {
+                                                                                line
+                                                                            }
+                                                                        </li>
+                                                                    ),
+                                                                )}
+                                                            </ul>
+                                                        ) : (
+                                                            <p>No warnings.</p>
+                                                        )}
+                                                    </div>
+                                                ) : null}
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                        </div>
                     ) : null}
                 </div>
             ) : null}

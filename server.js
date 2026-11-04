@@ -104,6 +104,13 @@ import {
     requestCancelTransfer,
 } from "./lib/tools/storage-transfer.js";
 import {
+    bootstrapReclaimRuntime,
+    getPublicReclaimJob,
+    listPublicReclaimJobs,
+    requestCancelReclaimJob,
+    startReclaimReview,
+} from "./lib/tools/storage-reclaim.js";
+import {
     describeStorageSession,
     grantScanFolder,
 } from "./lib/tools/storage.js";
@@ -1338,6 +1345,90 @@ async function handleStorageTransferCancelPost(response, transferId) {
 }
 
 
+async function handleStorageReclaimReviewPost(request, response, transferId) {
+    let body;
+
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    try {
+        const job = await startReclaimReview({
+            transferId,
+            entryIds: Array.isArray(body.entryIds) ? body.entryIds : undefined,
+            maxMs: Number.isInteger(body.maxMs) ? body.maxMs : undefined,
+        });
+        sendJson(response, 200, {
+            job: getPublicReclaimJob(job.id),
+        });
+    } catch (error) {
+        console.error(
+            "POST /api/storage/transfers/:id/reclaim-review failed:",
+            error.message,
+        );
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not start reclaim review."),
+        );
+    }
+}
+
+
+async function handleStorageReclaimJobsGet(response) {
+    try {
+        sendJson(response, 200, { jobs: listPublicReclaimJobs() });
+    } catch (error) {
+        console.error("GET /api/storage/reclaim-jobs failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error),
+            userSafeMessage(error, "Could not list reclaim jobs."),
+        );
+    }
+}
+
+
+async function handleStorageReclaimJobGet(response, jobId) {
+    try {
+        const job = getPublicReclaimJob(jobId);
+        if (!job) {
+            sendError(response, 404, "Unknown reclaim job.");
+            return;
+        }
+        sendJson(response, 200, { job });
+    } catch (error) {
+        console.error("GET /api/storage/reclaim-jobs/:id failed:", error.message);
+        sendError(
+            response,
+            clientErrorStatus(error, 404),
+            userSafeMessage(error, "Could not load that reclaim job."),
+        );
+    }
+}
+
+
+async function handleStorageReclaimJobCancelPost(response, jobId) {
+    try {
+        const job = requestCancelReclaimJob(jobId);
+        sendJson(response, 200, { job });
+    } catch (error) {
+        console.error(
+            "POST /api/storage/reclaim-jobs/:id/cancel failed:",
+            error.message,
+        );
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not cancel that reclaim job."),
+        );
+    }
+}
+
+
 async function routeRequest(request, response, url) {
     const pathname = url.pathname;
 
@@ -1831,6 +1922,25 @@ async function routeRequest(request, response, url) {
         }
 
         {
+            const reclaimReviewMatch = pathname.match(
+                /^\/api\/storage\/transfers\/([^/]+)\/reclaim-review$/,
+            );
+
+            if (reclaimReviewMatch) {
+                if (!requireMethod(request, response, ["POST"])) {
+                    return;
+                }
+
+                await handleStorageReclaimReviewPost(
+                    request,
+                    response,
+                    decodeURIComponent(reclaimReviewMatch[1]),
+                );
+                return;
+            }
+        }
+
+        {
             const transferGetMatch = pathname.match(
                 /^\/api\/storage\/transfers\/([^/]+)$/,
             );
@@ -1843,6 +1953,51 @@ async function routeRequest(request, response, url) {
                 await handleStorageTransferGet(
                     response,
                     decodeURIComponent(transferGetMatch[1]),
+                );
+                return;
+            }
+        }
+
+        if (pathname === "/api/storage/reclaim-jobs") {
+            if (!requireMethod(request, response, ["GET"])) {
+                return;
+            }
+
+            await handleStorageReclaimJobsGet(response);
+            return;
+        }
+
+        {
+            const reclaimCancelMatch = pathname.match(
+                /^\/api\/storage\/reclaim-jobs\/([^/]+)\/cancel$/,
+            );
+
+            if (reclaimCancelMatch) {
+                if (!requireMethod(request, response, ["POST"])) {
+                    return;
+                }
+
+                await handleStorageReclaimJobCancelPost(
+                    response,
+                    decodeURIComponent(reclaimCancelMatch[1]),
+                );
+                return;
+            }
+        }
+
+        {
+            const reclaimJobMatch = pathname.match(
+                /^\/api\/storage\/reclaim-jobs\/([^/]+)$/,
+            );
+
+            if (reclaimJobMatch) {
+                if (!requireMethod(request, response, ["GET"])) {
+                    return;
+                }
+
+                await handleStorageReclaimJobGet(
+                    response,
+                    decodeURIComponent(reclaimJobMatch[1]),
                 );
                 return;
             }
@@ -1862,6 +2017,7 @@ async function main() {
     const transcriptInit = await initializeTranscript();
     await initializeConversationMemory();
     await bootstrapTransferRuntime();
+    bootstrapReclaimRuntime();
 
     const server = http.createServer(handleRequest);
 

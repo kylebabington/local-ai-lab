@@ -15,6 +15,7 @@
     "verify:storage": "node scripts/verify-storage-scan.js",
     "verify:storage-offload": "node scripts/verify-storage-offload.js",
     "verify:storage-transfer": "node scripts/verify-storage-transfer.js",
+    "verify:storage-reclaim": "node scripts/verify-storage-reclaim.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
