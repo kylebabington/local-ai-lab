@@ -192,6 +192,12 @@ Verify with `npm run verify:storage-removal` (mocked, helper-build, live-recycle
 
 **Not enabled:** real Documents/Downloads/media/project files, permanent deletion, emptying the Recycle Bin, generic delete tools.
 
+### Watch Me Try (Phase E1)
+
+In Computer mode, **Watch Me Try** starts a bounded (default 90s, max 120s) read-only diagnostic watch for a chosen application/process. You reproduce the problem manually, optionally mark **Trying now** / **I tried it** (user-reported timestamps), then **Stop & Analyze**. The server builds an evidence report from process samples and a dedicated crash/hang event-log window (Application Error 1000, WER 1001 including informational, Hang 1002, .NET Runtime failures). No app launching, process killing, or repairs.
+
+Verify with `npm run verify:troubleshooting`.
+
 ### Guided manual reclamation (Milestone D2.5)
 
 For real verified originals, the Computer panel’s **Review Files to Reclaim Manually** section is read-only guidance: copy paths, reverify the external copy, recheck whether the original still exists, mark user-reported handling, and show Explorer recovery steps. Local AI never deletes, recycles, or moves real user files. Free-space deltas are observational and are not attributed as Local AI removals.

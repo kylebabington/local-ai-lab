@@ -5,6 +5,7 @@ import { ChatMessageItem } from "../components/ChatMessage";
 import { EmptyState } from "../components/EmptyState";
 import { StorageOffloadPanel } from "../components/StorageOffloadPanel";
 import { StorageScanPanel } from "../components/StorageScanPanel";
+import { TroubleshootingPanel } from "../components/TroubleshootingPanel";
 import { fetchStorageSession } from "../services/storageService";
 import {
     approveAction,
@@ -514,6 +515,9 @@ export function ChatPage() {
                     <StorageOffloadPanel
                         refreshKey={scanRefresh}
                         hasGrants={hasScanGrants}
+                    />
+                    <TroubleshootingPanel
+                        computerBusy={busy || approvalBusyId !== null}
                     />
                 </>
             ) : null}

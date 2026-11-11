@@ -127,6 +127,20 @@ import {
     reverifyManualEntry,
 } from "./lib/tools/storage-manual-reclaim.js";
 import {
+    APP_PRESETS,
+    bootstrapTroubleshootingRuntime,
+    getPublicWatch,
+    interruptAllWatches,
+    listPublicWatches,
+} from "./lib/troubleshooting-session.js";
+import {
+    cancelWatch,
+    iTriedIt,
+    startWatch,
+    stopAndAnalyze,
+    tryingNow,
+} from "./lib/tools/troubleshooting-watch.js";
+import {
     describeStorageSession,
     grantScanFolder,
 } from "./lib/tools/storage.js";
@@ -1687,6 +1701,111 @@ async function handleStorageReclaimManifestGet(response, manifestId) {
 }
 
 
+async function handleTroubleshootingStartPost(request, response) {
+    let body;
+    try {
+        body = await readJsonBody(request);
+    } catch (error) {
+        sendError(response, error.status ?? 400, error.message);
+        return;
+    }
+
+    try {
+        const session = await startWatch({
+            preset: body.preset,
+            processName: body.processName,
+            problemDescription: body.problemDescription,
+            durationMs: body.durationMs,
+        });
+        sendJson(response, 200, { session });
+    } catch (error) {
+        console.error(
+            "POST /api/troubleshooting/sessions failed:",
+            error.message,
+        );
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not start that watch."),
+        );
+    }
+}
+
+
+async function handleTroubleshootingGet(response, sessionId) {
+    try {
+        const session = getPublicWatch(sessionId);
+        if (!session) {
+            sendError(response, 404, "Unknown troubleshooting session.");
+            return;
+        }
+        sendJson(response, 200, { session });
+    } catch (error) {
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not load that watch."),
+        );
+    }
+}
+
+
+async function handleTroubleshootingTryingNowPost(response, sessionId) {
+    try {
+        const session = tryingNow(sessionId);
+        sendJson(response, 200, { session });
+    } catch (error) {
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not record Trying now."),
+        );
+    }
+}
+
+
+async function handleTroubleshootingTriedPost(response, sessionId) {
+    try {
+        const session = iTriedIt(sessionId);
+        sendJson(response, 200, { session });
+    } catch (error) {
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not record I tried it."),
+        );
+    }
+}
+
+
+async function handleTroubleshootingStopPost(response, sessionId) {
+    try {
+        const session = await stopAndAnalyze(sessionId);
+        sendJson(response, 200, { session });
+    } catch (error) {
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not stop and analyze that watch."),
+        );
+    }
+}
+
+
+async function handleTroubleshootingCancelPost(response, sessionId) {
+    try {
+        const session = await cancelWatch(sessionId);
+        sendJson(response, 200, { session });
+    } catch (error) {
+        sendError(
+            response,
+            clientErrorStatus(error, error.status ?? 400),
+            userSafeMessage(error, "Could not cancel that watch."),
+        );
+    }
+}
+
+
 async function routeRequest(request, response, url) {
     const pathname = url.pathname;
 
@@ -2427,6 +2546,106 @@ async function routeRequest(request, response, url) {
             }
         }
 
+        if (pathname === "/api/troubleshooting/presets") {
+            if (!requireMethod(request, response, ["GET"])) {
+                return;
+            }
+            sendJson(response, 200, { presets: APP_PRESETS });
+            return;
+        }
+
+        if (pathname === "/api/troubleshooting/sessions") {
+            if (!requireMethod(request, response, ["GET", "POST"])) {
+                return;
+            }
+            if (request.method === "GET") {
+                sendJson(response, 200, { sessions: listPublicWatches() });
+                return;
+            }
+            await handleTroubleshootingStartPost(request, response);
+            return;
+        }
+
+        {
+            const tryNowMatch = pathname.match(
+                /^\/api\/troubleshooting\/sessions\/([^/]+)\/trying-now$/,
+            );
+            if (tryNowMatch) {
+                if (!requireMethod(request, response, ["POST"])) {
+                    return;
+                }
+                await handleTroubleshootingTryingNowPost(
+                    response,
+                    decodeURIComponent(tryNowMatch[1]),
+                );
+                return;
+            }
+        }
+
+        {
+            const triedMatch = pathname.match(
+                /^\/api\/troubleshooting\/sessions\/([^/]+)\/tried$/,
+            );
+            if (triedMatch) {
+                if (!requireMethod(request, response, ["POST"])) {
+                    return;
+                }
+                await handleTroubleshootingTriedPost(
+                    response,
+                    decodeURIComponent(triedMatch[1]),
+                );
+                return;
+            }
+        }
+
+        {
+            const stopMatch = pathname.match(
+                /^\/api\/troubleshooting\/sessions\/([^/]+)\/stop$/,
+            );
+            if (stopMatch) {
+                if (!requireMethod(request, response, ["POST"])) {
+                    return;
+                }
+                await handleTroubleshootingStopPost(
+                    response,
+                    decodeURIComponent(stopMatch[1]),
+                );
+                return;
+            }
+        }
+
+        {
+            const cancelMatch = pathname.match(
+                /^\/api\/troubleshooting\/sessions\/([^/]+)\/cancel$/,
+            );
+            if (cancelMatch) {
+                if (!requireMethod(request, response, ["POST"])) {
+                    return;
+                }
+                await handleTroubleshootingCancelPost(
+                    response,
+                    decodeURIComponent(cancelMatch[1]),
+                );
+                return;
+            }
+        }
+
+        {
+            const getMatch = pathname.match(
+                /^\/api\/troubleshooting\/sessions\/([^/]+)$/,
+            );
+            if (getMatch) {
+                if (!requireMethod(request, response, ["GET"])) {
+                    return;
+                }
+                await handleTroubleshootingGet(
+                    response,
+                    decodeURIComponent(getMatch[1]),
+                );
+                return;
+            }
+        }
+
         sendError(response, 404, "Route not found.");
     } catch (error) {
         console.error("Unhandled request error:", error.message);
@@ -2443,8 +2662,15 @@ async function main() {
     await bootstrapTransferRuntime();
     bootstrapReclaimRuntime();
     await bootstrapRemovalRuntime();
+    bootstrapTroubleshootingRuntime();
 
     const server = http.createServer(handleRequest);
+
+    const shutdown = () => {
+        interruptAllWatches("server_shutdown");
+    };
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
 
     server.listen(PORT, HOST, () => {
         console.log("Local AI API");
