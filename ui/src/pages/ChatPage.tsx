@@ -2,11 +2,9 @@ import { useEffect, useRef, useState } from "react";
 
 import { ChatComposer } from "../components/ChatComposer";
 import { ChatMessageItem } from "../components/ChatMessage";
+import { ComputerToolsPanel } from "../components/ComputerToolsPanel";
+import { ContextSelector } from "../components/ContextSelector";
 import { EmptyState } from "../components/EmptyState";
-import { StorageOffloadPanel } from "../components/StorageOffloadPanel";
-import { StorageScanPanel } from "../components/StorageScanPanel";
-import { TroubleshootingPanel } from "../components/TroubleshootingPanel";
-import { fetchStorageSession } from "../services/storageService";
 import {
     approveAction,
     listApprovals,
@@ -22,12 +20,15 @@ import {
     startNewConversation,
 } from "../services/chatService";
 import { isConversationChangedError } from "../services/http";
+import { fetchStorageSession } from "../services/storageService";
 import type {
     AgentResponse,
     ChatContextMode,
     ChatMessage,
     PendingApproval,
 } from "../types";
+
+const STICK_BOTTOM_PX = 80;
 
 const SAVE_ERROR = "Conversation could not be saved.";
 
@@ -91,7 +92,7 @@ function reconcileApprovals(
 
 function kickerForMode(mode: ChatContextMode): string {
     if (mode === "computer") {
-        return "Next message uses Computer tools · files and Windows diagnostics run immediately · scan folders are session-only · changes need approval";
+        return "Next message uses Computer tools · open Computer Tools for diagnostics, Watch Me Try, scan, and offload workflows · changes need approval";
     }
 
     if (mode === "project") {
@@ -118,19 +119,18 @@ export function ChatPage() {
     const [saveError, setSaveError] = useState<string | null>(null);
     const [scanRefresh, setScanRefresh] = useState(0);
     const [hasScanGrants, setHasScanGrants] = useState(false);
+    const [computerToolsOpen, setComputerToolsOpen] = useState(false);
+    const [computerToolsMounted, setComputerToolsMounted] = useState(false);
+    const [stickToBottom, setStickToBottom] = useState(true);
     const logRef = useRef<HTMLDivElement>(null);
     const conversationIdRef = useRef<string | null>(null);
+    const stickToBottomRef = useRef(true);
 
     useEffect(() => {
         conversationIdRef.current = conversationId;
     }, [conversationId]);
 
     useEffect(() => {
-        if (contextMode !== "computer") {
-            setHasScanGrants(false);
-            return;
-        }
-
         let cancelled = false;
 
         fetchStorageSession()
@@ -148,7 +148,33 @@ export function ChatPage() {
         return () => {
             cancelled = true;
         };
-    }, [contextMode, scanRefresh]);
+    }, [scanRefresh]);
+
+    useEffect(() => {
+        stickToBottomRef.current = stickToBottom;
+    }, [stickToBottom]);
+
+    useEffect(() => {
+        const log = logRef.current;
+        if (!log) {
+            return;
+        }
+
+        function onScroll() {
+            const el = logRef.current;
+            if (!el) {
+                return;
+            }
+            const distance =
+                el.scrollHeight - el.scrollTop - el.clientHeight;
+            const nearBottom = distance <= STICK_BOTTOM_PX;
+            stickToBottomRef.current = nearBottom;
+            setStickToBottom(nearBottom);
+        }
+
+        log.addEventListener("scroll", onScroll, { passive: true });
+        return () => log.removeEventListener("scroll", onScroll);
+    }, []);
 
     useEffect(() => {
         let cancelled = false;
@@ -212,11 +238,12 @@ export function ChatPage() {
     useEffect(() => {
         const log = logRef.current;
 
-        if (!log) {
+        if (!log || !stickToBottomRef.current) {
             return;
         }
 
-        const reduceMotion = document.documentElement.dataset.reducedMotion === "true";
+        const reduceMotion =
+            document.documentElement.dataset.reducedMotion === "true";
 
         log.scrollTo({
             top: log.scrollHeight,
@@ -284,6 +311,8 @@ export function ChatPage() {
         setBusy(true);
         setError(null);
         setSaveError(null);
+        stickToBottomRef.current = true;
+        setStickToBottom(true);
 
         try {
             await persistUserMessage(turnConversationId, userMessage);
@@ -479,116 +508,172 @@ export function ChatPage() {
 
     const empty =
         !loadingHistory && messages.length === 0 && !busy && !historyError;
+    const toolsVisible = computerToolsOpen && contextMode === "computer";
 
     return (
-        <section className="page page-chat" aria-labelledby="chat-heading">
-            <div className="page-toolbar">
-                <div>
+        <section
+            className={`page page-chat${toolsVisible ? " has-tools-open" : ""}`}
+            aria-labelledby="chat-heading"
+        >
+            <div className="page-toolbar chat-toolbar">
+                <div className="chat-toolbar-copy">
                     <h1 id="chat-heading">Chat</h1>
                     <p className="page-kicker">{kickerForMode(contextMode)}</p>
                 </div>
-                <button
-                    type="button"
-                    className="btn btn-ghost"
-                    onClick={() => void handleNewConversation()}
-                    disabled={
-                        busy ||
-                        persisting ||
-                        loadingHistory ||
-                        !conversationId ||
-                        (messages.length === 0 && !error && !saveError)
-                    }
-                >
-                    New conversation
-                </button>
+                <div className="toolbar-actions chat-toolbar-actions">
+                    <ContextSelector
+                        value={contextMode}
+                        onChange={(mode) => {
+                            setContextMode(mode);
+                            if (mode === "computer") {
+                                setComputerToolsMounted(true);
+                            }
+                        }}
+                        disabled={busy || loadingHistory || approvalBusyId !== null}
+                    />
+                    {contextMode === "computer" ? (
+                        <button
+                            type="button"
+                            className={`btn${toolsVisible ? " btn-primary" : " btn-ghost"}`}
+                            aria-pressed={toolsVisible}
+                            aria-controls="computer-tools-panel"
+                            onClick={() =>
+                                setComputerToolsOpen((value) => !value)
+                            }
+                        >
+                            {toolsVisible ? "Hide Computer Tools" : "Computer Tools"}
+                        </button>
+                    ) : null}
+                    <button
+                        type="button"
+                        className="btn btn-ghost"
+                        onClick={() => void handleNewConversation()}
+                        disabled={
+                            busy ||
+                            persisting ||
+                            loadingHistory ||
+                            !conversationId ||
+                            (messages.length === 0 && !error && !saveError)
+                        }
+                    >
+                        New conversation
+                    </button>
+                </div>
             </div>
 
-            {contextMode === "computer" ? (
-                <>
-                    <StorageScanPanel
-                        refreshKey={scanRefresh}
-                        computerBusy={busy || approvalBusyId !== null}
-                        onGrantsChanged={() =>
-                            setScanRefresh((value) => value + 1)
-                        }
-                    />
-                    <StorageOffloadPanel
-                        refreshKey={scanRefresh}
-                        hasGrants={hasScanGrants}
-                    />
-                    <TroubleshootingPanel
-                        computerBusy={busy || approvalBusyId !== null}
-                    />
-                </>
+            {contextMode === "computer" && !computerToolsOpen ? (
+                <p className="computer-tools-intro" role="note">
+                    Computer Tools stay closed so chat stays primary. Open them for
+                    System Diagnostics, Watch Me Try, Scan Folders, Offload
+                    Planning, and Transfers &amp; Reclamation. Closing the panel
+                    does not cancel running jobs.
+                </p>
             ) : null}
 
-            <div className="chat-log" ref={logRef} tabIndex={0} aria-label="Conversation">
-                {loadingHistory ? (
-                    <p className="chat-working" aria-live="polite">
-                        Loading conversation…
-                    </p>
-                ) : null}
+            <div className="chat-workspace">
+                <div className="chat-column">
+                    <div
+                        className="chat-log"
+                        ref={logRef}
+                        tabIndex={0}
+                        aria-label="Conversation"
+                    >
+                        {loadingHistory ? (
+                            <p className="chat-working" aria-live="polite">
+                                Loading conversation…
+                            </p>
+                        ) : null}
 
-                {historyError ? (
-                    <div className="banner banner-error" role="alert">
-                        <strong>Could not load history</strong>
-                        <p>{historyError}</p>
+                        {historyError ? (
+                            <div className="banner banner-error" role="alert">
+                                <strong>Could not load history</strong>
+                                <p>{historyError}</p>
+                            </div>
+                        ) : null}
+
+                        {empty ? (
+                            <EmptyState
+                                title="Ask your computer"
+                                body="One shared transcript keeps Chat, Project, File, and Computer turns in order. The context selector only changes how the next message is processed."
+                                hint="Choose Chat, Project, File, or Computer in the toolbar. New conversation archives the current thread and starts fresh — long-term Conversation Memory is preserved."
+                            />
+                        ) : (
+                            messages.map((message) => (
+                                <ChatMessageItem
+                                    key={message.id}
+                                    message={message}
+                                    approvalBusy={
+                                        approvalBusyId === message.approval?.id
+                                    }
+                                    onApprove={(approvalId, approveDecision) =>
+                                        void handleApproval(
+                                            approvalId,
+                                            "approve",
+                                            approveDecision,
+                                        )
+                                    }
+                                    onReject={(approvalId) =>
+                                        void handleApproval(approvalId, "reject")
+                                    }
+                                />
+                            ))
+                        )}
+
+                        {busy ? (
+                            <p className="chat-working" aria-live="polite">
+                                Generating response…
+                            </p>
+                        ) : null}
+
+                        {saveError ? (
+                            <div className="banner banner-error" role="alert">
+                                <strong>Conversation could not be saved.</strong>
+                                <p>{saveError}</p>
+                            </div>
+                        ) : null}
+
+                        {error ? (
+                            <div className="banner banner-error" role="alert">
+                                <strong>Could not complete that request</strong>
+                                <p>{error}</p>
+                            </div>
+                        ) : null}
                     </div>
-                ) : null}
 
-                {empty ? (
-                    <EmptyState
-                        title="Ask your computer"
-                        body="One shared transcript keeps Chat, Project, File, and Computer turns in order. The context selector only changes how the next message is processed."
-                        hint="Choose Chat, Project, File, or Computer next to the composer. New conversation archives the current thread and starts fresh — long-term Conversation Memory is preserved."
+                    <ChatComposer
+                        busy={busy || loadingHistory || approvalBusyId !== null}
+                        onSend={handleSend}
                     />
-                ) : (
-                    messages.map((message) => (
-                        <ChatMessageItem
-                            key={message.id}
-                            message={message}
-                            approvalBusy={approvalBusyId === message.approval?.id}
-                            onApprove={(approvalId, approveDecision) =>
-                                void handleApproval(
-                                    approvalId,
-                                    "approve",
-                                    approveDecision,
-                                )
+                </div>
+
+                {computerToolsMounted ? (
+                    <div
+                        id="computer-tools-panel"
+                        className={`computer-tools-shell${toolsVisible ? " is-open" : ""}`}
+                        hidden={!toolsVisible}
+                    >
+                        <ComputerToolsPanel
+                            open={toolsVisible}
+                            computerBusy={busy || approvalBusyId !== null}
+                            scanRefresh={scanRefresh}
+                            hasScanGrants={hasScanGrants}
+                            onGrantsChanged={() =>
+                                setScanRefresh((value) => value + 1)
                             }
-                            onReject={(approvalId) =>
-                                void handleApproval(approvalId, "reject")
-                            }
+                            onClose={() => setComputerToolsOpen(false)}
                         />
-                    ))
-                )}
-
-                {busy ? (
-                    <p className="chat-working" aria-live="polite">
-                        Generating response…
-                    </p>
-                ) : null}
-
-                {saveError ? (
-                    <div className="banner banner-error" role="alert">
-                        <strong>Conversation could not be saved.</strong>
-                        <p>{saveError}</p>
-                    </div>
-                ) : null}
-
-                {error ? (
-                    <div className="banner banner-error" role="alert">
-                        <strong>Could not complete that request</strong>
-                        <p>{error}</p>
                     </div>
                 ) : null}
             </div>
 
-            <ChatComposer
-                contextMode={contextMode}
-                onContextModeChange={setContextMode}
-                busy={busy || loadingHistory || approvalBusyId !== null}
-                onSend={handleSend}
-            />
+            {toolsVisible ? (
+                <button
+                    type="button"
+                    className="computer-tools-backdrop"
+                    aria-label="Close Computer Tools"
+                    onClick={() => setComputerToolsOpen(false)}
+                />
+            ) : null}
         </section>
     );
 }

@@ -83,6 +83,15 @@ export async function fetchTroubleshootingPresets(): Promise<
     return data.presets ?? [];
 }
 
+export async function listTroubleshootingSessions(): Promise<
+    TroubleshootingSession[]
+> {
+    const data = await apiRequest<{ sessions?: TroubleshootingSession[] }>(
+        "/api/troubleshooting/sessions",
+    );
+    return data.sessions ?? [];
+}
+
 export async function startTroubleshootingSession(body: {
     preset?: string;
     processName?: string;

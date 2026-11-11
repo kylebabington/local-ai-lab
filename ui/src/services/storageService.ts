@@ -179,6 +179,13 @@ export async function startStorageReclaimReview(
     return data.job;
 }
 
+export async function fetchStorageReclaimJobs(): Promise<ReclaimJob[]> {
+    const data = await apiRequest<{ jobs?: ReclaimJob[] }>(
+        "/api/storage/reclaim-jobs",
+    );
+    return data.jobs ?? [];
+}
+
 export async function fetchStorageReclaimJob(jobId: string): Promise<ReclaimJob> {
     const data = await apiRequest<{ job: ReclaimJob }>(
         `/api/storage/reclaim-jobs/${encodeURIComponent(jobId)}`,

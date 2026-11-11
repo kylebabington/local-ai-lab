@@ -1,21 +1,11 @@
 import { useId, useRef, type FormEvent, type KeyboardEvent } from "react";
 
-import type { ChatContextMode } from "../types";
-import { ContextSelector } from "./ContextSelector";
-
 interface ChatComposerProps {
-    contextMode: ChatContextMode;
-    onContextModeChange: (mode: ChatContextMode) => void;
     busy: boolean;
     onSend: (message: string) => void;
 }
 
-export function ChatComposer({
-    contextMode,
-    onContextModeChange,
-    busy,
-    onSend,
-}: ChatComposerProps) {
+export function ChatComposer({ busy, onSend }: ChatComposerProps) {
     const fieldId = useId();
     const formRef = useRef<HTMLFormElement>(null);
 
@@ -61,12 +51,6 @@ export function ChatComposer({
             aria-label="Send a message"
             aria-busy={busy}
         >
-            <ContextSelector
-                value={contextMode}
-                onChange={onContextModeChange}
-                disabled={busy}
-            />
-
             <div className="chat-composer-main">
                 <label className="visually-hidden" htmlFor={fieldId}>
                     Ask your computer anything

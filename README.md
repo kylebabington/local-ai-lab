@@ -102,6 +102,8 @@ Make sure Ollama is running before you use any of the scripts.
 
 The frontend lives in `ui/` and talks to `server.js` through a Vite proxy (`/api` → `http://127.0.0.1:3001`).
 
+Both processes are required. If only the UI is running, Vite proxies `/api` to `127.0.0.1:3001` and returns **502** until the API is up.
+
 Terminal 1:
 
 ```powershell
@@ -117,6 +119,8 @@ npm run dev
 ```
 
 Then open `http://localhost:5173`.
+
+Computer Tools (diagnostics, Watch Me Try, scan, offload) live in a closable right panel on the Chat page. They stay closed by default so the conversation remains primary.
 
 * **Chat** context uses `POST /api/chat` and persists model history to `chat-history.json`
 * **Project** context uses `POST /api/rag` (Project RAG only; not written to Chat model history)

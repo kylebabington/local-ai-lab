@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { approveAction, rejectAction } from "../services/agentService";
+import { selectionForLoadedPlan } from "../lib/offloadSelection";
 import {
     cancelStorageReclaimJob,
     cancelStorageRemoval,
@@ -11,8 +12,10 @@ import {
     fetchStoragePlan,
     fetchStoragePlans,
     fetchStorageReclaimJob,
+    fetchStorageReclaimJobs,
     fetchStorageRemoval,
     fetchStorageTransfer,
+    fetchStorageTransfers,
     lockReclaimSelection,
     lockStorageSelection,
     markManualReclamationHandled,
@@ -82,15 +85,22 @@ function eligibilityLabel(eligibility: ReclaimCandidate["eligibility"]): string 
     return "Verification failed";
 }
 
+export type StorageOffloadSection = "planning" | "reclaim";
+
 interface StorageOffloadPanelProps {
     refreshKey?: number;
     hasGrants: boolean;
+    /** Controls which workflow block is visible; state stays mounted either way. */
+    section?: StorageOffloadSection;
 }
 
 export function StorageOffloadPanel({
     refreshKey = 0,
     hasGrants,
+    section = "planning",
 }: StorageOffloadPanelProps) {
+    const showPlanning = section === "planning";
+    const showReclaim = section === "reclaim";
     const [volumes, setVolumes] = useState<StorageVolume[]>([]);
     const [destinationVolumeId, setDestinationVolumeId] = useState("");
     const [folderName, setFolderName] = useState("Offload");
@@ -136,25 +146,60 @@ export function StorageOffloadPanel({
         setVolumes(data.volumes ?? []);
     }
 
-    async function loadLatestPlan() {
+    async function loadLatestPlan(preserveSelection = false) {
         const plans = await fetchStoragePlans();
         const latest = plans[plans.length - 1] ?? null;
         if (latest) {
             setPlan(latest);
-            setSelected(
-                new Set(
-                    latest.entries
-                        .filter((entry) => entry.selectable)
-                        .map((entry) => entry.id),
+            setSelected((current) =>
+                selectionForLoadedPlan(
+                    latest,
+                    preserveSelection ? current : null,
                 ),
             );
+        }
+    }
+
+    async function recoverActiveJobs() {
+        const [transfers, reclaimJobs] = await Promise.all([
+            fetchStorageTransfers().catch(() => [] as StorageTransfer[]),
+            fetchStorageReclaimJobs().catch(() => [] as ReclaimJob[]),
+        ]);
+
+        const activeTransfer =
+            transfers.find(
+                (item) =>
+                    item.status === "starting" ||
+                    item.status === "running" ||
+                    item.status === "cancelling",
+            ) ??
+            transfers.find((item) => item.status === "completed") ??
+            null;
+
+        if (activeTransfer) {
+            setTransfer(activeTransfer);
+        }
+
+        const activeReclaim =
+            reclaimJobs.find(
+                (item) =>
+                    item.status === "starting" ||
+                    item.status === "running" ||
+                    item.status === "cancelling" ||
+                    item.status === "awaiting_selection",
+            ) ??
+            reclaimJobs.find((item) => item.status === "completed") ??
+            null;
+
+        if (activeReclaim) {
+            setReclaimJob(activeReclaim);
         }
     }
 
     useEffect(() => {
         let cancelled = false;
 
-        Promise.all([loadDrives(false), loadLatestPlan()])
+        Promise.all([loadDrives(false), loadLatestPlan(false), recoverActiveJobs()])
             .then(() => {
                 if (!cancelled) {
                     setError(null);
@@ -216,13 +261,7 @@ export function StorageOffloadPanel({
             });
             const full = await fetchStoragePlan(String(created.planId));
             setPlan(full);
-            setSelected(
-                new Set(
-                    full.entries
-                        .filter((entry) => entry.selectable && entry.safety === "likely_portable")
-                        .map((entry) => entry.id),
-                ),
-            );
+            setSelected(selectionForLoadedPlan(full, null));
         } catch (caught) {
             setError(
                 caught instanceof Error
@@ -758,7 +797,30 @@ export function StorageOffloadPanel({
     }, [reclaimJob]);
 
     return (
-        <article className="storage-scan-panel" aria-label="Storage offload planning">
+        <article
+            className="storage-scan-panel computer-tool-section"
+            aria-label={
+                showReclaim
+                    ? "Verified transfers and reclamation"
+                    : "Storage offload planning"
+            }
+        >
+            {error ? (
+                <div className="banner banner-error" role="alert">
+                    <strong>
+                        {showReclaim
+                            ? "Transfers & reclamation"
+                            : "Offload planning"}
+                    </strong>
+                    <p>{error}</p>
+                </div>
+            ) : null}
+
+            <div
+                className="storage-offload-section"
+                hidden={!showPlanning}
+                inert={!showPlanning ? true : undefined}
+            >
             <div className="storage-scan-header">
                 <div>
                     <h2>Offload planning</h2>
@@ -770,7 +832,7 @@ export function StorageOffloadPanel({
                 <button
                     type="button"
                     className="btn btn-ghost"
-                    disabled={busy}
+                    disabled={busy || !showPlanning}
                     onClick={() => {
                         setBusy(true);
                         void loadDrives(true)
@@ -788,17 +850,10 @@ export function StorageOffloadPanel({
                 </button>
             </div>
 
-            {error ? (
-                <div className="banner banner-error" role="alert">
-                    <strong>Offload planning</strong>
-                    <p>{error}</p>
-                </div>
-            ) : null}
-
             {!hasGrants ? (
                 <p className="storage-scan-empty">
-                    Grant at least one scan folder above before planning an
-                    offload.
+                    Grant at least one scan folder in Scan Folders before planning
+                    an offload.
                 </p>
             ) : null}
 
@@ -1052,6 +1107,29 @@ export function StorageOffloadPanel({
                         </div>
                     ) : null}
                 </div>
+            ) : null}
+            </div>
+
+            <div
+                className="storage-offload-section"
+                hidden={!showReclaim}
+                inert={!showReclaim ? true : undefined}
+            >
+            <div className="storage-scan-header">
+                <div>
+                    <h2>Transfers &amp; reclamation</h2>
+                    <p>
+                        Track verified copies, then review originals carefully.
+                        Closing Computer Tools does not cancel in-flight work.
+                    </p>
+                </div>
+            </div>
+
+            {!transfer && !reclaimJob && !removalJob ? (
+                <p className="storage-scan-empty">
+                    No active transfer or reclaim job yet. Create and approve an
+                    offload from Offload Planning first.
+                </p>
             ) : null}
 
             {transfer ? (
@@ -1806,6 +1884,7 @@ export function StorageOffloadPanel({
                     ) : null}
                 </div>
             ) : null}
+            </div>
         </article>
     );
 }

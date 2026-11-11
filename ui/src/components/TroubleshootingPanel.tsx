@@ -4,6 +4,7 @@ import {
     cancelTroubleshootingSession,
     fetchTroubleshootingPresets,
     fetchTroubleshootingSession,
+    listTroubleshootingSessions,
     markTroubleshootingTried,
     markTroubleshootingTryingNow,
     startTroubleshootingSession,
@@ -34,6 +35,14 @@ function formatBytes(bytes: number | null | undefined): string {
     return `${scaled.toFixed(scaled >= 10 ? 0 : 1)} ${units[unit]}`;
 }
 
+function isTerminalStatus(status: string): boolean {
+    return ["completed", "cancelled", "expired", "interrupted"].includes(status);
+}
+
+function isActiveStatus(status: string): boolean {
+    return status === "watching" || status === "analyzing";
+}
+
 export function TroubleshootingPanel({
     computerBusy = false,
 }: TroubleshootingPanelProps) {
@@ -44,18 +53,66 @@ export function TroubleshootingPanel({
     const [session, setSession] = useState<TroubleshootingSession | null>(null);
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState<string | null>(null);
+    const [sessionNotice, setSessionNotice] = useState<string | null>(null);
 
     useEffect(() => {
-        void fetchTroubleshootingPresets()
-            .then((list) => {
+        let cancelled = false;
+
+        async function hydrate() {
+            try {
+                const list = await fetchTroubleshootingPresets();
+                if (cancelled) {
+                    return;
+                }
                 setPresets(list);
-                if (list.length && !list.some((p) => p.id === presetId)) {
+                if (list.length && !list.some((item) => item.id === presetId)) {
                     setPresetId(list[0].id);
                 }
-            })
-            .catch(() => {
+            } catch {
                 // presets optional for custom names
-            });
+            }
+
+            try {
+                const sessions = await listTroubleshootingSessions();
+                if (cancelled) {
+                    return;
+                }
+
+                const preferred =
+                    sessions.find((item) => isActiveStatus(item.status)) ??
+                    sessions.find((item) => item.report) ??
+                    sessions[0] ??
+                    null;
+
+                if (preferred) {
+                    const live = await fetchTroubleshootingSession(
+                        preferred.troubleshootingSessionId,
+                    ).catch(() => preferred);
+                    if (!cancelled) {
+                        setSession(live);
+                        setSessionNotice(null);
+                    }
+                } else {
+                    setSessionNotice(
+                        "No watch sessions are available from the API. If you had one open before a server restart, it was cleared from memory.",
+                    );
+                }
+            } catch (caught) {
+                if (!cancelled) {
+                    setSessionNotice(
+                        caught instanceof Error
+                            ? caught.message
+                            : "Could not recover troubleshooting sessions.",
+                    );
+                }
+            }
+        }
+
+        void hydrate();
+
+        return () => {
+            cancelled = true;
+        };
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
@@ -63,15 +120,22 @@ export function TroubleshootingPanel({
         if (
             !session ||
             computerBusy ||
-            (session.status !== "watching" && session.status !== "analyzing")
+            !isActiveStatus(session.status)
         ) {
             return;
         }
         const timer = setInterval(() => {
             void fetchTroubleshootingSession(session.troubleshootingSessionId)
-                .then(setSession)
-                .catch(() => {
-                    // ignore transient poll errors
+                .then((live) => {
+                    setSession(live);
+                    setSessionNotice(null);
+                })
+                .catch((caught: unknown) => {
+                    setSessionNotice(
+                        caught instanceof Error
+                            ? caught.message
+                            : "Watch session is no longer available from the API.",
+                    );
                 });
         }, 2000);
         return () => clearInterval(timer);
@@ -89,6 +153,7 @@ export function TroubleshootingPanel({
     async function handleStart() {
         setBusy(true);
         setError(null);
+        setSessionNotice(null);
         try {
             const body =
                 customProcess.trim().length > 0
@@ -121,6 +186,7 @@ export function TroubleshootingPanel({
         setError(null);
         try {
             setSession(await action());
+            setSessionNotice(null);
         } catch (caught) {
             setError(caught instanceof Error ? caught.message : fallback);
         } finally {
@@ -128,9 +194,11 @@ export function TroubleshootingPanel({
         }
     }
 
+    const showStartForm = !session || isTerminalStatus(session.status);
+
     return (
-        <article className="storage-offload-panel">
-            <header className="storage-offload-header">
+        <article className="watch-panel computer-tool-section" aria-label="Watch Me Try">
+            <header className="watch-panel-header">
                 <div>
                     <h2>Watch Me Try</h2>
                     <p>
@@ -148,19 +216,21 @@ export function TroubleshootingPanel({
                 </div>
             ) : null}
 
-            {!session ||
-            ["completed", "cancelled", "expired", "interrupted"].includes(
-                session.status,
-            ) ? (
-                <div className="storage-offload-controls">
-                    <label>
-                        Application preset
+            {sessionNotice && !session ? (
+                <div className="banner banner-info" role="status">
+                    <strong>Session status</strong>
+                    <p>{sessionNotice}</p>
+                </div>
+            ) : null}
+
+            {showStartForm ? (
+                <div className="watch-form">
+                    <label className="files-field">
+                        <span>Application</span>
                         <select
                             value={presetId}
                             disabled={busy || computerBusy}
-                            onChange={(event) =>
-                                setPresetId(event.target.value)
-                            }
+                            onChange={(event) => setPresetId(event.target.value)}
                         >
                             {presets.map((preset) => (
                                 <option key={preset.id} value={preset.id}>
@@ -169,8 +239,8 @@ export function TroubleshootingPanel({
                             ))}
                         </select>
                     </label>
-                    <label>
-                        Or exact process name
+                    <label className="files-field">
+                        <span>Exact process name (optional)</span>
                         <input
                             type="text"
                             value={customProcess}
@@ -181,17 +251,17 @@ export function TroubleshootingPanel({
                             }
                         />
                     </label>
-                    <label>
-                        What goes wrong?
+                    <label className="files-field">
+                        <span>Describe the problem</span>
                         <textarea
                             value={problem}
                             disabled={busy || computerBusy}
-                            rows={3}
+                            rows={4}
                             placeholder="Cursor crashes when I open a project…"
                             onChange={(event) => setProblem(event.target.value)}
                         />
                     </label>
-                    <div className="storage-offload-actions">
+                    <div className="watch-actions">
                         <button
                             type="button"
                             className="btn btn-primary"
@@ -205,42 +275,62 @@ export function TroubleshootingPanel({
             ) : null}
 
             {session ? (
-                <div className="storage-offload-table-wrap">
-                    <p>
-                        Status: <strong>{session.status}</strong> · Target{" "}
-                        <code>{session.targetAppLabel}</code> (
-                        <code>{session.processName}</code>) · Elapsed{" "}
-                        {elapsedLabel}
-                    </p>
-                    <p>{session.message}</p>
-                    <p>
-                        Detected:{" "}
-                        {session.latestSample
-                            ? session.latestSample.processCount > 0
-                                ? `yes (${session.latestSample.processCount} process${session.latestSample.processCount === 1 ? "" : "es"})`
-                                : "not detected in latest sample"
-                            : "waiting for first sample"}
-                        {session.latestSample?.anyNotResponding
-                            ? " · not responding observed"
-                            : ""}
-                        {session.latestSample
-                            ? ` · working set ${formatBytes(session.latestSample.totalWorkingSetBytes)}`
-                            : ""}
-                    </p>
-                    {session.tryingNowAt ? (
-                        <p>
-                            User-reported Trying now: {session.tryingNowAt}
+                <div className="watch-session">
+                    <div className="watch-status-card" role="status">
+                        <p className="watch-status-line">
+                            <span className="watch-status-pill">{session.status}</span>
+                            <span>
+                                {session.targetAppLabel}{" "}
+                                <code>{session.processName}</code>
+                            </span>
                         </p>
-                    ) : null}
-                    {session.reproductionAttemptAt ? (
-                        <p>
-                            User-reported I tried it:{" "}
-                            {session.reproductionAttemptAt}
-                        </p>
-                    ) : null}
+                        <dl className="watch-metrics">
+                            <div>
+                                <dt>Elapsed</dt>
+                                <dd>{elapsedLabel}</dd>
+                            </div>
+                            <div>
+                                <dt>Processes</dt>
+                                <dd>
+                                    {session.latestSample
+                                        ? session.latestSample.processCount
+                                        : "—"}
+                                </dd>
+                            </div>
+                            <div>
+                                <dt>Working set</dt>
+                                <dd>
+                                    {session.latestSample
+                                        ? formatBytes(
+                                              session.latestSample
+                                                  .totalWorkingSetBytes,
+                                          )
+                                        : "—"}
+                                </dd>
+                            </div>
+                            <div>
+                                <dt>Not responding</dt>
+                                <dd>
+                                    {session.latestSample?.anyNotResponding
+                                        ? "Observed"
+                                        : "No"}
+                                </dd>
+                            </div>
+                        </dl>
+                        {session.message ? <p>{session.message}</p> : null}
+                        {session.tryingNowAt ? (
+                            <p>Trying now marked at {session.tryingNowAt}</p>
+                        ) : null}
+                        {session.reproductionAttemptAt ? (
+                            <p>I tried it marked at {session.reproductionAttemptAt}</p>
+                        ) : null}
+                        {sessionNotice ? (
+                            <p className="computer-tool-muted">{sessionNotice}</p>
+                        ) : null}
+                    </div>
 
                     {session.status === "watching" ? (
-                        <div className="storage-offload-actions">
+                        <div className="watch-actions">
                             <button
                                 type="button"
                                 className="btn btn-ghost"
@@ -309,74 +399,80 @@ export function TroubleshootingPanel({
                     ) : null}
 
                     {session.report ? (
-                        <div className="banner banner-info" role="status">
-                            <strong>
-                                Evidence report · confidence{" "}
-                                {session.report.confidence}
-                            </strong>
-                            <p>
-                                <strong>Observed</strong>
-                            </p>
-                            <ul>
-                                {session.report.observed.map((line) => (
-                                    <li key={line}>{line}</li>
-                                ))}
-                            </ul>
-                            <p>
-                                <strong>Likely causes</strong>
-                            </p>
-                            <ul>
-                                {session.report.likelyCauses.map((item) => (
-                                    <li key={item.hypothesis}>
-                                        {item.hypothesis} — {item.support}{" "}
-                                        <em>Limit: {item.limitation}</em>
-                                    </li>
-                                ))}
-                            </ul>
-                            {session.report.unverified.length ? (
-                                <>
-                                    <p>
-                                        <strong>Unverified</strong>
-                                    </p>
-                                    <ul>
-                                        {session.report.unverified.map(
-                                            (line) => (
-                                                <li key={line}>{line}</li>
-                                            ),
-                                        )}
-                                    </ul>
-                                </>
-                            ) : null}
-                            <p>
-                                <strong>Recommended next steps</strong>
-                            </p>
-                            <ol>
-                                {session.report.recommendedNextSteps.map(
-                                    (line) => (
+                        <div className="watch-report" role="status">
+                            <header>
+                                <h3>Evidence report</h3>
+                                <p>Confidence: {session.report.confidence}</p>
+                            </header>
+
+                            <section>
+                                <h4>Observed</h4>
+                                <ul>
+                                    {session.report.observed.map((line) => (
                                         <li key={line}>{line}</li>
-                                    ),
-                                )}
-                            </ol>
-                            <p>
-                                <strong>Verification</strong>
-                            </p>
-                            <ul>
-                                {session.report.verification.map((line) => (
-                                    <li key={line}>{line}</li>
-                                ))}
-                            </ul>
+                                    ))}
+                                </ul>
+                            </section>
+
+                            <section>
+                                <h4>Likely causes</h4>
+                                <ul>
+                                    {session.report.likelyCauses.map((item) => (
+                                        <li key={item.hypothesis}>
+                                            <strong>{item.hypothesis}</strong>
+                                            <span>
+                                                {" "}
+                                                — {item.support}. Limit:{" "}
+                                                {item.limitation}
+                                            </span>
+                                        </li>
+                                    ))}
+                                </ul>
+                            </section>
+
+                            {session.report.unverified.length ? (
+                                <section>
+                                    <h4>Unverified</h4>
+                                    <ul>
+                                        {session.report.unverified.map((line) => (
+                                            <li key={line}>{line}</li>
+                                        ))}
+                                    </ul>
+                                </section>
+                            ) : null}
+
+                            <section>
+                                <h4>Recommended next steps</h4>
+                                <ol>
+                                    {session.report.recommendedNextSteps.map(
+                                        (line) => (
+                                            <li key={line}>{line}</li>
+                                        ),
+                                    )}
+                                </ol>
+                            </section>
+
+                            <section>
+                                <h4>Verification</h4>
+                                <ul>
+                                    {session.report.verification.map((line) => (
+                                        <li key={line}>{line}</li>
+                                    ))}
+                                </ul>
+                            </section>
                         </div>
                     ) : null}
 
-                    {["completed", "cancelled", "expired", "interrupted"].includes(
-                        session.status,
-                    ) ? (
-                        <div className="storage-offload-actions">
+                    {isTerminalStatus(session.status) ? (
+                        <div className="watch-actions">
                             <button
                                 type="button"
                                 className="btn btn-ghost"
                                 disabled={busy}
-                                onClick={() => setSession(null)}
+                                onClick={() => {
+                                    setSession(null);
+                                    setSessionNotice(null);
+                                }}
                             >
                                 Start another watch
                             </button>

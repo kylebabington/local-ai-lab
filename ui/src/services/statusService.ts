@@ -32,6 +32,26 @@ export async function fetchHealth(): Promise<HealthSnapshot> {
         return DISCONNECTED;
     }
 
+    if (!response.ok) {
+        if (response.status === 502 || response.status === 504) {
+            return {
+                status: "disconnected",
+                label: "Backend unreachable",
+                detail: `Proxy ${response.status}: API on 127.0.0.1:3001 did not respond`,
+                modelName: DISPLAY_MODEL,
+                ready: false,
+            };
+        }
+
+        return {
+            status: "disconnected",
+            label: "Backend unavailable",
+            detail: `Health check failed (${response.status})`,
+            modelName: DISPLAY_MODEL,
+            ready: false,
+        };
+    }
+
     let data: HealthResponse;
 
     try {

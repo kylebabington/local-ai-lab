@@ -19,6 +19,7 @@
     "verify:storage-removal": "node scripts/verify-storage-removal.js",
     "verify:storage-manual-reclaim": "node scripts/verify-storage-manual-reclaim.js",
     "verify:troubleshooting": "node scripts/verify-troubleshooting-watch.js",
+    "verify:offload-selection": "node scripts/verify-offload-selection.js",
     "build:windows-recycle": "node scripts/build-windows-recycle.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

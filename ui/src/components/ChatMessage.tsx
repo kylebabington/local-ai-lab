@@ -1,4 +1,3 @@
-import { ToolActionCard } from "./ToolActionCard";
 import { isFileRagSource, isMemorySource } from "../services/chatService";
 import type {
     ChatMessage,
@@ -7,6 +6,8 @@ import type {
     PendingApproval,
     ToolAction,
 } from "../types";
+import { MarkdownContent } from "./MarkdownContent";
+import { ToolActionCard } from "./ToolActionCard";
 
 interface ChatMessageItemProps {
     message: ChatMessage;
@@ -242,7 +243,15 @@ export function ChatMessageItem({
                 </ul>
             ) : null}
             {message.content ? (
-                <p className="chat-message-content">{message.content}</p>
+                message.role === "user" ? (
+                    <p className="chat-message-content chat-message-content-plain">
+                        {message.content}
+                    </p>
+                ) : (
+                    <div className="chat-message-content chat-message-content-md">
+                        <MarkdownContent content={message.content} />
+                    </div>
+                )
             ) : null}
             {approval && onApprove && onReject ? (
                 <ToolActionCard
